@@ -1,0 +1,5 @@
+# WSL/local overlay. Session logs and workspace records deliberately retain the
+# base bundle's $DSH_HOME roots so Telegram and Web observe the same history.
+- id: session-telemetry-otel
+  disabled: true
+

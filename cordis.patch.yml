@@ -1,0 +1,5 @@
+# telegram bundle patch. The selected host profile must already provide the
+# injected workspace/session services (the standard web profile does).
+- insert:
+    - id: telegram
+      name: 'dsh-telegram'

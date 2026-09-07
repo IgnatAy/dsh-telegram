@@ -1,0 +1,5 @@
+# pnpm 11 project settings. Build approvals: esbuild's postinstall is a legacy
+# no-op (the platform binary ships via optionalDependencies), but pnpm fails
+# non-interactive installs on unapproved build scripts, so approve it here.
+allowBuilds:
+  esbuild: true
