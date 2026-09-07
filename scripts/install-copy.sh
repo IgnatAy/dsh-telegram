@@ -46,7 +46,7 @@ strip_managed_patch() {
 validate_profile() {
   local profile="$1"
   if ! printf '%s' "$profile" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._-]*$' \
-    || [ "$profile" = "." ] || [ "$profile" = ".." ]; then
+    || [ "$profile" = "." ] || [ "$profile" = ".." ] || [ "$profile" = "node_modules" ]; then
     echo "install: invalid profile name '$profile'" >&2
     exit 1
   fi
@@ -156,6 +156,8 @@ strip_managed_patch "$PATCH" "$TEMP_PATCH"
 NEED_TELEGRAM=true
 NEED_WORKSPACE=false
 NEED_SESSION_CONTROLLER=false
+NEED_AGENT_PRESETS=false
+NEED_SUBAGENT_SETTINGS=false
 if grep -qE '^[[:space:]]*- id: telegram([[:space:]]|$)' "$TEMP_PATCH"; then
   NEED_TELEGRAM=false
 fi
@@ -168,8 +170,17 @@ if [ "$PROFILE" = "telegram" ] \
   && ! grep -qE '^[[:space:]]*- id: session-controller([[:space:]]|$)' "$TEMP_PATCH"; then
   NEED_SESSION_CONTROLLER=true
 fi
+if [ "$PROFILE" = "telegram" ] \
+  && ! grep -qE '^[[:space:]]*- id: agent-presets([[:space:]]|$)' "$TEMP_PATCH"; then
+  NEED_AGENT_PRESETS=true
+fi
+if [ "$PROFILE" = "telegram" ] \
+  && ! grep -qE '^[[:space:]]*- id: subagent-model-selection-settings([[:space:]]|$)' "$TEMP_PATCH"; then
+  NEED_SUBAGENT_SETTINGS=true
+fi
 if [ "$NEED_TELEGRAM" = true ] || [ "$NEED_WORKSPACE" = true ] \
-  || [ "$NEED_SESSION_CONTROLLER" = true ]; then
+  || [ "$NEED_SESSION_CONTROLLER" = true ] || [ "$NEED_AGENT_PRESETS" = true ] \
+  || [ "$NEED_SUBAGENT_SETTINGS" = true ]; then
   CLEAN_PATCH="$(mktemp "${PATCH}.telegram.clean.XXXXXX")"
   awk '!/^[[:space:]]*\[\][[:space:]]*$/' "$TEMP_PATCH" > "$CLEAN_PATCH"
   mv "$CLEAN_PATCH" "$TEMP_PATCH"
@@ -182,6 +193,12 @@ if [ "$NEED_TELEGRAM" = true ] || [ "$NEED_WORKSPACE" = true ] \
   fi
   if [ "$NEED_SESSION_CONTROLLER" = true ]; then
     printf '    - id: session-controller\n      name: '\''@deepseek-ai/dsh-api-session-controller'\''\n' >> "$TEMP_PATCH"
+  fi
+  if [ "$NEED_AGENT_PRESETS" = true ]; then
+    printf '    - id: agent-presets\n      name: '\''@deepseek-ai/dsh-agent-presets'\''\n      config:\n        default: standard\n' >> "$TEMP_PATCH"
+  fi
+  if [ "$NEED_SUBAGENT_SETTINGS" = true ]; then
+    printf '    - id: subagent-model-selection-settings\n      name: '\''@deepseek-ai/dsh-tool-subagent/model-selection-settings'\''\n' >> "$TEMP_PATCH"
   fi
   if [ "$NEED_TELEGRAM" = true ]; then
     printf '    - id: telegram\n      name: '\''dsh-telegram'\''\n' >> "$TEMP_PATCH"

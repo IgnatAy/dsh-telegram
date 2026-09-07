@@ -9,6 +9,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, AgentHandle, ModelSelection } from '@deepseek-ai/dsh-agent'
+import type { SessionSelectModelValue } from '@deepseek-ai/dsh-api-session-controller'
 import type { ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, LlmModelInfo, LlmResolvedModelInfo } from '@deepseek-ai/dsh-llm'
@@ -236,14 +237,16 @@ interface PendingTelegramQuestion {
   settled: boolean
 }
 
-/** Session Controller surface used to apply model selection to an Agent borrowed from Web UI. */
-interface TelegramSessionController {
-  selectModel(request: ModelSelection & { readonly sessionId: SessionId }): Promise<{
-    readonly selected: ModelSelection
-  }>
+/** Convert the controller's wire-format effort ID to the Agent's branded ID. */
+function agentSelection({ selected }: SessionSelectModelValue): ModelSelection {
+  return {
+    provider: selected.provider,
+    model: selected.model,
+    ...(selected.reasoningEffort === undefined
+      ? {}
+      : { reasoningEffort: ReasoningEffortId(selected.reasoningEffort) }),
+  }
 }
-
-type TelegramContext = Context & { readonly sessionController: TelegramSessionController }
 
 const HELP_TEXT = [
   '📖 **命令帮助**',
@@ -314,6 +317,7 @@ const IMAGE_EXTENSIONS: Record<ImageMediaType, string> = {
   'image/webp': '.webp',
   'image/gif': '.gif',
 }
+
 
 /** Extract the concatenated text blocks of an assistant message. */
 function assistantText(event: Extract<SessionEvent, { type: 'assistant/message' }>): string | undefined {
@@ -464,7 +468,7 @@ class UnsupportedTelegramDocumentError extends Error {
  * handles that this bridge created or resumed itself.
  */
 export class TelegramBridge {
-  private readonly ctx: TelegramContext
+  private readonly ctx: Context
   private readonly client: TelegramClientLike
   private readonly allowedUserIds: ReadonlySet<number>
   private readonly allowAllUsers: boolean
@@ -523,7 +527,7 @@ export class TelegramBridge {
     const model = (options.model ?? 'deepseek-v4-flash').trim()
     if (provider === '') throw new Error('telegram: provider must not be empty')
     if (model === '') throw new Error('telegram: model must not be empty')
-    this.ctx = ctx as TelegramContext
+    this.ctx = ctx
     this.client = options.client ?? new TelegramClient(options.token, {
       ...(options.pollingTimeoutSec === undefined ? {} : { pollingTimeoutSec: options.pollingTimeoutSec }),
     })
@@ -1425,7 +1429,7 @@ export class TelegramBridge {
       sessionId: active.agent.session.id,
       ...selection,
     })
-    state.preferences.selection = { ...result.selected }
+    state.preferences.selection = agentSelection(result)
   }
 
   /** Render the complete per-chat selection shown before every no-argument selector. */
@@ -1732,7 +1736,7 @@ export class TelegramBridge {
       sessionId: agent.session.id,
       ...preferences.selection,
     })
-    preferences.selection = { ...result.selected }
+    preferences.selection = agentSelection(result)
   }
 
   /** Initialize delivery bookkeeping and Telegram-only bindings for one Agent. */

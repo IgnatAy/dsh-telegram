@@ -1,52 +1,17 @@
 #!/bin/bash
-# Build the telegram external plugin: compile src/ → lib/ (JS) and
-# lib/types/ (declarations) against the INSTALLED dsh packages.
-#
-# This environment has no dsh source checkout: dsh ships as an npx-installed
-# app (`@deepseek-ai/dsh` plus its whole `@deepseek-ai/*` dependency closure
-# hoisted in one node_modules). The script resolves that install root and
-# symlinks the packages the plugin imports from it, so tsc type-checks
-# against the exact packages the running dsh loads — and the very same links
-# double as the runtime peer-resolution bridge for the installed plugin
-# (Node resolves a symlinked plugin by its realpath, so the plugin must find
-# its peers from its own node_modules, not the profile's).
-#
-# When `dsh` is on PATH (or `DSH_ROOT` names its install root), the build uses
-# that runtime's peer packages. Otherwise a normal local `pnpm install`
-# supplies the declared peers and development dependencies.
+# Compile source and declarations against DSH v0.1.2-rc.1.
+# Uses the local frozen-lockfile dependencies by default. An explicit
+# DSH_ROOT can point to a matching installed runtime; its versions are checked
+# before links change so an old alpha installation cannot enter a release.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-# --- Locate the dsh install root (the dir whose node_modules has @deepseek-ai) ---
-resolve_dsh_root() {
-  if [ -n "${DSH_ROOT:-}" ]; then
-    echo "$DSH_ROOT"
-    return 0
-  fi
-  if command -v dsh &>/dev/null; then
-    local launcher
-    launcher=$(readlink -f "$(command -v dsh)" 2>/dev/null || command -v dsh)
-    # The launcher (possibly a symlink into a package) lives inside the install
-    # root; walk up until we find the dir whose node_modules has @deepseek-ai.
-    local dir
-    dir=$(dirname "$launcher")
-    local i=0
-    while [ "$i" -lt 16 ]; do
-      if [ -d "$dir/node_modules/@deepseek-ai" ]; then
-        echo "$dir"
-        return 0
-      fi
-      [ "$dir" = "/" ] && break
-      dir=$(dirname "$dir")
-      i=$((i + 1))
-    done
-  fi
-  return 1
-}
-
-DSH_ROOT="$(resolve_dsh_root || true)"
+DSH_ROOT="${DSH_ROOT:-}"
+if [ -n "$DSH_ROOT" ]; then
+  DSH_ROOT="$(cd "$DSH_ROOT" && pwd)"
+fi
 
 # --- Local TypeScript (devDependency) ---
 TSC="$ROOT/node_modules/.bin/tsc"
@@ -72,12 +37,27 @@ link_pkg() {
 }
 
 if [ -n "$DSH_ROOT" ] && [ -d "$DSH_ROOT/node_modules/@deepseek-ai" ]; then
+  node --input-type=module - "$DSH_ROOT" <<'NODE_CHECK'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+const root = process.argv[2]
+const expected = JSON.parse(readFileSync('package.json', 'utf8')).devDependencies
+for (const [name, version] of Object.entries(expected)) {
+  if (!name.startsWith('@deepseek-ai/dsh-')) continue
+  const file = join(root, 'node_modules', name, 'package.json')
+  const actual = JSON.parse(readFileSync(file, 'utf8')).version
+  if (actual !== version) {
+    throw new Error('build: ' + name + ' requires the tested ' + version + ' build dependencies; found ' + actual + '. Update DSH or build with the local locked dependencies.')
+  }
+}
+NODE_CHECK
   echo "=== Linking runtime peer dependencies (root: $DSH_ROOT) ==="
   mkdir -p node_modules/@deepseek-ai
   link_pkg @deepseek-ai/cordis required
   link_pkg @deepseek-ai/schemastery required
   link_pkg @deepseek-ai/dsh-agent required
   link_pkg @deepseek-ai/dsh-agent-presets required
+  link_pkg @deepseek-ai/dsh-api-session-controller required
   link_pkg @deepseek-ai/dsh-attachment required
   link_pkg @deepseek-ai/dsh-llm required
   link_pkg @deepseek-ai/dsh-session required
@@ -86,7 +66,7 @@ if [ -n "$DSH_ROOT" ] && [ -d "$DSH_ROOT/node_modules/@deepseek-ai" ]; then
   link_pkg @deepseek-ai/dsh-system-prompt required
   link_pkg @deepseek-ai/dsh-workspace required
 else
-  echo "=== dsh install root not found; using locally installed peer dependencies ==="
+  echo "=== Using locally locked rc.1 peer dependencies ==="
 fi
 
 for package in \
@@ -94,6 +74,7 @@ for package in \
   @deepseek-ai/schemastery \
   @deepseek-ai/dsh-agent \
   @deepseek-ai/dsh-agent-presets \
+  @deepseek-ai/dsh-api-session-controller \
   @deepseek-ai/dsh-attachment \
   @deepseek-ai/dsh-llm \
   @deepseek-ai/dsh-session \

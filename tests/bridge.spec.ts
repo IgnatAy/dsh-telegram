@@ -169,12 +169,13 @@ function createHarness(
   let nextMessageId = 1
   for (const session of sessionSpecs) {
     headers.set(session.id, {
-      version: '1',
+      version: 0,
+      isSeeded: false,
       id: SessionId(session.id),
       cwd: session.cwd,
       createdAt: 1,
       ...(session.agentPreset === undefined ? {} : { agentPreset: session.agentPreset }),
-    } as unknown as SessionHeader)
+    } satisfies SessionHeader)
     if (session.title !== undefined) titles.set(session.id, session.title)
     if (session.location !== undefined) locations.set(session.id, session.location)
   }
@@ -324,12 +325,13 @@ function createHarness(
     agents: {
       create: vi.fn(async (opts: { sessionId: string; meta: { cwd: string; agentPreset?: string } }) => {
         const header = {
-          version: '1',
+          version: 0,
+          isSeeded: false,
           id: SessionId(opts.sessionId),
           cwd: opts.meta.cwd,
           createdAt: 1,
           ...(opts.meta.agentPreset === undefined ? {} : { agentPreset: opts.meta.agentPreset }),
-        } as unknown as SessionHeader
+        } satisfies SessionHeader
         headers.set(opts.sessionId, header)
         return makeHandle(opts.sessionId, header)
       }),
