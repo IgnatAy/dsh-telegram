@@ -112,3 +112,90 @@ describe('splitMessage', () => {
     expect(() => splitMessage('text', 0)).toThrow('positive integer')
   })
 })
+
+describe('rich Markdown regressions', () => {
+  it('renders headings, including existing bold', () => {
+    expect(markdownToHtml('## 大标题\n### **重点** ###\n#tag')).toBe('<b>大标题</b>\n<b>重点</b>\n#tag')
+  })
+
+  it.each(["'''", '‘‘‘', '’’’', '~~~', '````'])('accepts %s fences and CRLF', fence => {
+    expect(markdownToHtml(`  ${fence}text\r\n## **文字** <x>\r\n  ${fence}`)).toBe('<pre>## **文字** &lt;x&gt;</pre>')
+  })
+
+  it('keeps mismatched fences literal', () => {
+    expect(markdownToHtml("'''\n文字\n```")).toBe('&#39;&#39;&#39;\n文字\n```')
+  })
+
+  it.each(['[文字](https://example.com/a_(b)?x=1&y=2)',
+    String.raw`[文字]\(https://example.com/a_(b)?x=1&y=2)`,
+    String.raw`[文字]\(https://example.com/a_\(b\)?x=1&y=2\)`])('renders links: %s', text => {
+    expect(markdownToHtml(text)).toBe('<a href="https://example.com/a_(b)?x=1&amp;y=2">文字</a>')
+  })
+
+  it('supports formatted labels and titles, and escapes attributes', () => {
+    expect(markdownToHtml('[**文字**](https://example.com "标题")')).toBe('<a href="https://example.com"><b>文字</b></a>')
+    expect(markdownToHtml('[x](https://example.com/?q="x")')).toBe('<a href="https://example.com/?q=&quot;x&quot;">x</a>')
+    expect(markdownToHtml('[x](javascript:alert(1))')).not.toContain('<a ')
+    expect(markdownToHtml('`[x](https://example.com)`')).toBe('<code>[x](https://example.com)</code>')
+  })
+
+  it('renders the reported escaped table without Markdown markers', () => {
+    const source = String.raw`\| 项目 | 内容 |
+\|---|---|
+\| 姓名 | 测试用户 |
+\| 报考类型 | **直博生**（申请编号 123456789） |
+\| 报考方向 | 信控（信息与控制） |
+\| 综合成绩 | 177 |
+\| 排名 | 3 |
+\| 考核等级 | **优秀营员** |`
+    const html = markdownToHtml(source)
+    expect(html).toMatch(/^<pre>项目/)
+    expect(html).toContain('姓名     │ 测试用户')
+    expect(html).toContain('直博生')
+    expect(html).toContain('优秀营员')
+    expect(html).not.toMatch(/\*\*|\\\||\|---/)
+    expect(html).toContain('─┼─')
+    expect(html).toMatch(/<\/pre>$/)
+  })
+
+  it('handles multiple columns and literal pipes', () => {
+    expect(markdownToHtml('| A | B | C |\n|:---|:---:|---:|\n| x\\|y | `a|b` | **c** |')).toBe(
+      '<pre>A   │ B   │ C\n────┼─────┼────\nx|y │ a|b │ c</pre>',
+    )
+    expect(markdownToHtml('a | b\ntext | more')).toBe('a | b\ntext | more')
+    expect(markdownToHtml('```\n| A | B |\n|---|---|\n```')).toBe('<pre>| A | B |\n|---|---|</pre>')
+  })
+
+  it('preserves long formatting across message boundaries', () => {
+    const source = '## **大标题**\n[**' + '链接😀'.repeat(20) + '**](https://example.com)\n'
+      + "'''\n" + '<code>&'.repeat(20) + "\n'''\n| A | B |\n|---|---|\n| 很长的表格内容 | 1234567890 |"
+    const chunks = markdownToHtmlChunks(source, 12)
+    for (const chunk of chunks) {
+      expect(chunk.plain.length).toBeLessThanOrEqual(12)
+      const stack: string[] = []
+      for (const tag of chunk.html.matchAll(/<(\/?)(b|a|pre|code)(?:\s[^>]*)?>/g)) {
+        if (tag[1]) expect(stack.pop()).toBe(tag[2])
+        else stack.push(tag[2])
+      }
+      expect(stack).toEqual([])
+    }
+    expect(chunks.map(chunk => chunk.plain).join('')).toBe(markdownToHtmlChunks(source, 4096).map(chunk => chunk.plain).join(''))
+    expect(chunks.filter(chunk => chunk.html.includes('<a ')).length).toBeGreaterThan(1)
+    expect(() => markdownToHtmlChunks('', 0)).toThrow('positive integer')
+  })
+})
+
+describe('escaped code fences in numbered replies', () => {
+  it('recognizes backslash-escaped backticks with NBSP indentation', () => {
+    const source = '2\\. Windows **fake-ip 模式**：\n\u00a0\u00a0 \\`\\`\\`\n'
+      + '   speit.example.com → 198.18.0.16\n   www\\.example.com → 198.18.0.19\n'
+      + '\u00a0\u00a0 \\`\\`\\`\n3\\. DSH 的 web\\_fetch...'
+    expect(markdownToHtml(source)).toBe('2. Windows <b>fake-ip 模式</b>：\n'
+      + '<pre>   speit.example.com → 198.18.0.16\n   www.example.com → 198.18.0.19</pre>\n3. DSH 的 web_fetch...')
+    expect(markdownToHtmlChunks(source, 24).map(chunk => chunk.plain).join('')).not.toMatch(/\\[.`_]/)
+  })
+
+  it('preserves backslashes in normal code fences', () => {
+    expect(markdownToHtml('    ```\nwww\\.example.com\n    ```')).toBe('<pre>www\\.example.com</pre>')
+  })
+})

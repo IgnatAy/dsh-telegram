@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.1
+
+- Render Markdown headings as bold and standard/escaped inline links as clickable HTML links.
+- Recognize backslash-escaped backtick fences and non-breaking-space indentation; decode Markdown escapes inside these compatibility blocks while preserving ordinary code verbatim.
+- Support indented backtick, tilde, straight-apostrophe and curly-apostrophe code fences, including CRLF input.
+- Render Markdown tables (including escaped leading pipes) as CJK-aligned preformatted tables with wrapped cells; remove inline Markdown markers inside cells.
+- Parse before splitting messages; preserve complete HTML tags and link targets in every chunk, with visible-text plain fallbacks.
+- Add formatting regressions and refresh the included JavaScript and declarations.
+- Validation: 131 automated tests pass in both working and release directories; TypeScript compilation and release import probe pass. Live Telegram delivery was not exercised.
+
 ## 0.2.0
 
 - Target DeepSeek Harness 0.1.2-rc.1; raise DSH peer requirements and lock development dependencies to this release.

@@ -9,29 +9,14 @@
  * @returns the HTML-escaped text.
  */
 export declare function escapeHtml(text: string): string;
-/**
- * Convert a conservative Markdown subset to Telegram HTML: fenced code blocks
- * to `<pre>`, inline code to `<code>`, `**bold**` to `<b>`; everything else is
- * HTML-escaped. Unbalanced fences stay literal because a dangling `<pre>`
- * would make Telegram reject the message.
- * @param text - the markdown text to convert.
- * @returns Telegram-HTML text.
- */
+/** Convert headings, links, bold, code and tables to supported Telegram HTML. */
 export declare function markdownToHtml(text: string): string;
 /** One independently valid Telegram message in HTML and plain-text forms. */
 export interface TelegramMessageChunk {
-    /** Telegram HTML whose visible text is at most the configured limit. */
     readonly html: string;
-    /** Plain-text fallback for the same visible content. */
     readonly plain: string;
 }
-/**
- * Format and split Markdown without leaving a fenced code tag open across
- * Telegram messages.
- * @param text - markdown text to format.
- * @param maxLength - maximum visible characters per Telegram message.
- * @returns independently valid HTML chunks and their plain-text fallbacks.
- */
+/** Split visible text, then reopen its formatting in each independent message. */
 export declare function markdownToHtmlChunks(text: string, maxLength: number): TelegramMessageChunk[];
 /**
  * Split text into chunks of at most `maxLength` characters, preferring the

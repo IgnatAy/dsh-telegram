@@ -35,7 +35,7 @@ describe('profile copy installer', () => {
       expect(updated.match(new RegExp('    - id: ' + id + '\\n', 'g'))).toHaveLength(1)
     }
     expect(readFileSync(join(profile, 'node_modules/dsh-telegram/lib/index.js'), 'utf8')).not.toContain('old alpha build')
-    expect(JSON.parse(readFileSync(join(profile, 'node_modules/dsh-telegram/package.json'), 'utf8')).version).toBe('0.2.0')
+    expect(JSON.parse(readFileSync(join(profile, 'node_modules/dsh-telegram/package.json'), 'utf8')).version).toBe('0.2.1')
   })
 
   it('replaces legacy installer rows and leaves unrelated web settings on uninstall', () => {

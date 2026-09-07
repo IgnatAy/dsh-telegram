@@ -1255,14 +1255,13 @@ describe('TelegramBridge', () => {
     expect(h.sent.length).toBe(0)
   })
 
-  it('/start explains how to select a session without creating an agent', async () => {
+  it('/start sends one preset in-character online reply without selecting a session', async () => {
     const h = createHarness()
     h.bridge.start()
     await waitFor(() => h.polls.length > 0 ? true : undefined, 'polling')
     h.client.getUpdates.mockResolvedValueOnce([update({ text: '/start' })])
     const reply = await waitFor(() => h.sent[0], 'online reply')
-    expect(reply.text).toContain('/use')
-    expect(reply.text).toContain('/help')
+    expect(reply.text).toMatch(/我在|夜还很长|茶也还热着|魔女没有离开|久远寺邸|童话还没有醒来/)
     expect(h.agents).toHaveLength(0)
   })
 
