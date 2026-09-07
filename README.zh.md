@@ -4,7 +4,7 @@
 
 DeepSeek Harness 的 Telegram Bot 插件。支持与 Agent 对话、切换工作区和会话、发送图片及回答 Agent 提问。通过长轮询运行，与 Web UI 共享会话。
 
-当前插件按照 **DeepSeek Harness v0.1.2-alpha.1** 版本开发。
+当前插件按照 **DeepSeek Harness v0.1.2-rc.1** 版本开发。
 
 ## 配置方法
 
