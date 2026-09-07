@@ -1,0 +1,12 @@
+node_modules/
+.pnpm-store/
+.DS_Store
+*Zone.Identifier
+.env
+.env.*
+!.env.example
+.dsh/
+telegram-downloads/
+coverage/
+*.log
+*.tsbuildinfo
