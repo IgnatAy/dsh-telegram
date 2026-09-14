@@ -1,5 +1,5 @@
 #!/bin/bash
-# Compile source and declarations against DSH v0.1.2-rc.1.
+# Compile source and declarations against DSH v0.1.5-rc.2.
 # Uses the local frozen-lockfile dependencies by default. An explicit
 # DSH_ROOT can point to a matching installed runtime; its versions are checked
 # before links change so an old alpha installation cannot enter a release.
@@ -41,9 +41,10 @@ if [ -n "$DSH_ROOT" ] && [ -d "$DSH_ROOT/node_modules/@deepseek-ai" ]; then
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 const root = process.argv[2]
-const expected = JSON.parse(readFileSync('package.json', 'utf8')).devDependencies
+const manifest = JSON.parse(readFileSync('package.json', 'utf8'))
+const expected = manifest.devDependencies
 for (const [name, version] of Object.entries(expected)) {
-  if (!name.startsWith('@deepseek-ai/dsh-')) continue
+  if (!name.startsWith('@deepseek-ai/dsh-') || !Object.hasOwn(manifest.peerDependencies, name)) continue
   const file = join(root, 'node_modules', name, 'package.json')
   const actual = JSON.parse(readFileSync(file, 'utf8')).version
   if (actual !== version) {
@@ -63,10 +64,11 @@ NODE_CHECK
   link_pkg @deepseek-ai/dsh-session required
   link_pkg @deepseek-ai/dsh-session-persistence required
   link_pkg @deepseek-ai/dsh-session-query required
+  link_pkg @deepseek-ai/dsh-session-title required
   link_pkg @deepseek-ai/dsh-system-prompt required
   link_pkg @deepseek-ai/dsh-workspace required
 else
-  echo "=== Using locally locked rc.1 peer dependencies ==="
+  echo "=== Using locally locked 0.1.5-rc.2 peer dependencies ==="
 fi
 
 for package in \
@@ -80,6 +82,7 @@ for package in \
   @deepseek-ai/dsh-session \
   @deepseek-ai/dsh-session-persistence \
   @deepseek-ai/dsh-session-query \
+  @deepseek-ai/dsh-session-title \
   @deepseek-ai/dsh-system-prompt \
   @deepseek-ai/dsh-workspace
 do

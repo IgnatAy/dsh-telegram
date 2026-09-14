@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -35,7 +35,14 @@ describe('profile copy installer', () => {
       expect(updated.match(new RegExp('    - id: ' + id + '\\n', 'g'))).toHaveLength(1)
     }
     expect(readFileSync(join(profile, 'node_modules/dsh-telegram/lib/index.js'), 'utf8')).not.toContain('old alpha build')
-    expect(JSON.parse(readFileSync(join(profile, 'node_modules/dsh-telegram/package.json'), 'utf8')).version).toBe('0.2.1')
+    expect(JSON.parse(readFileSync(join(profile, 'node_modules/dsh-telegram/package.json'), 'utf8')).version).toBe('0.2.2')
+    // Match DSH's shared profile fallback and import the copied build, including
+    // its new persistence helper and rc2 title dependency.
+    symlinkSync(fileURLToPath(new URL('../node_modules', import.meta.url)), join(home, 'profiles/node_modules'), 'dir')
+    expect(execFileSync(process.execPath, ['--input-type=module', '-e',
+      'const plugin = await import(process.argv[1]); console.log(typeof plugin.apply)',
+      join(profile, 'node_modules/dsh-telegram/lib/index.js'),
+    ], { encoding: 'utf8' }).trim()).toBe('function')
   })
 
   it('replaces legacy installer rows and leaves unrelated web settings on uninstall', () => {
@@ -53,7 +60,7 @@ describe('profile copy installer', () => {
     expect(readFileSync(patch, 'utf8').trim()).toBe(custom.trim())
   })
 
-  it('rejects the rc.1 reserved fallback directory for install and uninstall', () => {
+  it('rejects the reserved fallback directory for install and uninstall', () => {
     const { home, env } = fixture()
     const fallback = join(home, 'profiles/node_modules/node_modules/dsh-telegram')
     mkdirSync(fallback, { recursive: true })

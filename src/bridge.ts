@@ -16,9 +16,11 @@ import type { ContentBlock, LlmModelInfo, LlmResolvedModelInfo } from '@deepseek
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type { Session, SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 import { SessionId } from '@deepseek-ai/dsh-session'
+import { foldSessionTitle } from '@deepseek-ai/dsh-session-title'
+import { deleteSessionLogs, requireJsonlPersistence } from './persistence.js'
 import { randomUUID } from 'node:crypto'
-import { mkdir, open, realpath, rmdir, unlink } from 'node:fs/promises'
-import { basename, dirname, extname, isAbsolute, join, relative } from 'node:path'
+import { mkdir, open, realpath, unlink } from 'node:fs/promises'
+import { basename, extname, isAbsolute, join, relative } from 'node:path'
 import type {} from '@deepseek-ai/dsh-agent-presets'
 import type {} from '@deepseek-ai/dsh-attachment'
 import type {} from '@deepseek-ai/dsh-session-persistence'
@@ -156,7 +158,8 @@ interface ChatPreferences {
 
 interface CatalogSession {
   readonly id: SessionId
-  readonly header: SessionHeader
+  readonly header?: SessionHeader
+  readonly error?: string
   readonly title: string | undefined
   readonly archived: boolean
 }
@@ -1529,33 +1532,44 @@ export class TelegramBridge {
   /** Build the current numbered workspace/session catalog. */
   private async loadCatalog(): Promise<CatalogWorkspace[]> {
     const signal = this.abortController.signal
-    const records = await this.ctx.sessionQuery.listSessions(signal)
-    await this.repairTelegramMembership(records.map(record => record.header))
+    // Legacy membership discovery must not block registered workspaces when an
+    // unrelated stored header is unreadable (rc2 listing can reject globally).
+    try {
+      const records = await this.ctx.sessionQuery.listSessions(signal)
+      await this.repairTelegramMembership(records.map(record => record.header))
+    } catch (error) {
+      signal.throwIfAborted()
+      this.ctx.logger.warn('[telegram] historical session discovery failed: %s', messageOf(error))
+    }
     const workspaces = this.ctx.workspaceRegistry.list()
-    const sessionIds = workspaces.flatMap(workspace => [...workspace.sessionIds])
-    const titles = await this.ctx.sessionQuery.readTitleSnapshots(sessionIds, signal)
-    const headers = new Map(records.map(record => [String(record.header.id), record.header]))
-    const titleById = new Map<string, string>()
-    for (const result of titles) {
-      if (result.status === 'fulfilled') {
-        headers.set(String(result.sessionId), result.value.session)
-        if (result.value.title !== undefined) titleById.set(String(result.sessionId), result.value.title.title)
-      } else {
-        this.ctx.logger.warn('[telegram] title read for session %s failed: %s', result.sessionId, messageOf(result.reason))
+    const archived = new Set(this.ctx.workspaceRegistry.archivedSessionIds.map(String))
+    const sessions = new Map<string, CatalogSession>()
+    // Point observations avoid the old title API's second global persistence
+    // scan. Release each lease promptly instead of pinning every cold log.
+    for (const id of new Set(workspaces.flatMap(workspace => [...workspace.sessionIds]))) {
+      try {
+        const observation = await this.ctx.sessionQuery.observeSession(id, { signal, projectionMode: 'none' })
+        try {
+          sessions.set(String(id), {
+            id,
+            header: observation.header,
+            title: foldSessionTitle(observation.events)?.title,
+            archived: archived.has(String(id)),
+          })
+        } finally {
+          observation[Symbol.dispose]()
+        }
+      } catch (error) {
+        signal.throwIfAborted()
+        this.ctx.logger.warn('[telegram] read for session %s failed: %s', id, messageOf(error))
+        sessions.set(String(id), { id, title: undefined, error: messageOf(error), archived: archived.has(String(id)) })
       }
     }
-    const archived = new Set(this.ctx.workspaceRegistry.archivedSessionIds.map(String))
     return workspaces.map(workspace => ({
       workspace,
-      sessions: workspace.sessionIds.flatMap((id): CatalogSession[] => {
-        const header = headers.get(String(id))
-        if (header === undefined) return []
-        return [{
-          id,
-          header,
-          title: titleById.get(String(id)),
-          archived: archived.has(String(id)),
-        }]
+      sessions: workspace.sessionIds.flatMap(id => {
+        const session = sessions.get(String(id))
+        return session === undefined ? [] : [session]
       }),
     }))
   }
@@ -1596,6 +1610,7 @@ export class TelegramBridge {
           const currentSession = state.active?.sessionId === String(session.id)
           const badges = [
             ...(session.archived ? ['📦 已归档'] : []),
+            ...(session.error === undefined ? [] : ['⚠️ 读取失败']),
             ...(currentSession ? ['✅ 当前会话'] : []),
           ]
           lines.push(`　**${workspaceIndex + 1}.${sessionIndex + 1}**　${title}${badges.length === 0 ? '' : `　${badges.join(' · ')}`}`)
@@ -1624,6 +1639,9 @@ export class TelegramBridge {
     const selected = entry.sessions[sessionNumber - 1]
     if (selected === undefined) {
       throw new Error(`「${entry.workspace.title}」中没有会话编号 ${sessionNumber}，请重新发送 /use`)
+    }
+    if (selected.header === undefined) {
+      throw new Error(`会话 ${selected.id} 读取失败：${selected.error ?? '没有可用的会话信息'}`)
     }
     const state = this.stateFor(chatId)
     if (state.active?.sessionId === String(selected.id)) {
@@ -1814,35 +1832,11 @@ export class TelegramBridge {
       throw new Error('当前会话由 DSH 其他界面保持运行，Telegram 无法安全地永久删除它')
     }
     const header = active.agent.session.header
-    const location = this.ctx.sessionPersistence.locate(header)
-    if (location === undefined || location.kind !== 'jsonl'
-      || !/^session\.jsonl(?:\.zstd)?$/.test(basename(location.path))) {
-      throw new Error('当前持久化后端不支持 Telegram 的永久删除操作')
-    }
+    const storage = requireJsonlPersistence(this.ctx.sessionPersistence)
     await this.releaseActive(state)
     await owned.handle.dispose()
     this.ownedAgents.delete(active.sessionId)
-    await active.workspace.detachSession(header.id)
-    try {
-      await unlink(location.path)
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        try {
-          await active.workspace.attachSession(header.id)
-        } catch (rollbackError) {
-          throw new AggregateError([error, rollbackError], '会话日志删除失败，工作区成员关系也无法恢复')
-        }
-        throw error
-      }
-    }
-    try {
-      await rmdir(dirname(location.path))
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code
-      if (code !== 'ENOENT' && code !== 'ENOTEMPTY') {
-        this.ctx.logger.warn('[telegram] deleted session %s but could not remove its directory: %s', header.id, messageOf(error))
-      }
-    }
+    await deleteSessionLogs(storage, header.id, () => active.workspace.detachSession(header.id), this.abortController.signal)
     return String(header.id)
   }
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.2
+
+- Target DeepSeek Harness 0.1.5-rc.2 and update the locked development dependencies.
+- Read registered sessions through rc2 point observations, release observation leases, and isolate unreadable sessions without changing catalog numbering.
+- Replace the retired persistence locator in `/clear`; acquire write ownership and delete all JSONL generations, including compressed logs, while retaining the lock inode.
+- Restore staged logs if workspace detachment fails; handle empty sessions that never reached disk.
+- Refresh the included build. Change only the DSH version statement in both READMEs.
+- Validation: 139 tests, TypeScript checks, build, and copied-plugin import pass on Node.js 24.21.0 / macOS, including real rc2 JSONL backend tests. WSL2 profile startup and live Telegram/LLM requests were not exercised.
+
 ## 0.2.1
 
 - Render Markdown headings as bold and standard/escaped inline links as clickable HTML links.

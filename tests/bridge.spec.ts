@@ -6,7 +6,7 @@ import type { TelegramClientLike, TelegramDownloadedFile, TelegramMessage, Teleg
 import type { ImageAttachmentLimits, ImageAttachmentRef, SaveImageAttachment } from '@deepseek-ai/dsh-attachment'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { LlmCallConfig, LlmResolvedModelInfo } from '@deepseek-ai/dsh-llm'
-import { SessionId } from '@deepseek-ai/dsh-session'
+import { SESSION_FORMAT_VERSION, SessionId } from '@deepseek-ai/dsh-session'
 import type { SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 import type { Workspace } from '@deepseek-ai/dsh-workspace'
 import { access, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises'
@@ -57,8 +57,8 @@ interface Harness {
     agents: { create: Mock; resume: Mock; get: Mock }
     attachments: { imageLimits: ImageAttachmentLimits; validateImage: Mock; saveImages: Mock }
     llm: { listProviders: Mock; listModels: Mock; resolveModelInfo: Mock; resolveCallConfig: Mock }
-    sessionPersistence: { locate: Mock; load: Mock }
-    sessionQuery: { listSessions: Mock; readTitleSnapshots: Mock }
+    sessionPersistence: { resolveCurrentLog: Mock; stat: Mock; open: Mock }
+    sessionQuery: { listSessions: Mock; observeSession: Mock }
     sessionController: { selectModel: Mock }
     workspaceRegistry: { list: Mock; resolveByPath: Mock; archivedSessionIds: string[] }
     logger: { warn: Mock; error: Mock }
@@ -169,8 +169,9 @@ function createHarness(
   let nextMessageId = 1
   for (const session of sessionSpecs) {
     headers.set(session.id, {
-      version: 0,
+      version: SESSION_FORMAT_VERSION,
       isSeeded: false,
+      delegationDepth: 0,
       id: SessionId(session.id),
       cwd: session.cwd,
       createdAt: 1,
@@ -325,8 +326,9 @@ function createHarness(
     agents: {
       create: vi.fn(async (opts: { sessionId: string; meta: { cwd: string; agentPreset?: string } }) => {
         const header = {
-          version: 0,
+          version: SESSION_FORMAT_VERSION,
           isSeeded: false,
+          delegationDepth: 0,
           id: SessionId(opts.sessionId),
           cwd: opts.meta.cwd,
           createdAt: 1,
@@ -388,22 +390,24 @@ function createHarness(
       }),
     },
     sessionPersistence: {
-      locate: vi.fn((header: SessionHeader) => {
-        const path = locations.get(String(header.id))
-        return path === undefined ? undefined : { kind: 'jsonl', path }
-      }),
-      load: vi.fn(async (id: string) => ({ meta: headers.get(String(id)), events: [] })),
+      resolveCurrentLog: vi.fn(async (id: string) => locations.get(String(id))),
+      stat: vi.fn(async (id: string) => locations.has(String(id)) ? { header: headers.get(String(id)) } : undefined),
+      open: vi.fn(async () => ({ close: vi.fn(async () => {}) })),
     },
     sessionQuery: {
-      listSessions: vi.fn(async () => [...headers.values()].map(header => ({ header, availability: 'available' }))),
-      readTitleSnapshots: vi.fn(async (ids: string[]) => ids.map(id => ({
-        status: 'fulfilled',
-        sessionId: id,
-        value: {
-          session: headers.get(String(id)),
-          title: titles.has(String(id)) ? { title: titles.get(String(id)) } : undefined,
-        },
-      }))),
+      listSessions: vi.fn(async () => [...headers.values()].map(header => ({ header, live: false, persisted: true }))),
+      observeSession: vi.fn(async (id: string) => {
+        const header = headers.get(String(id))
+        if (header === undefined) throw new Error(`unknown session ${id}`)
+        return {
+          header,
+          events: titles.has(String(id)) ? [{
+            type: 'session/title', seq: 0, time: 1,
+            data: { title: titles.get(String(id)), messageSeqs: [], source: { kind: 'user' } },
+          }] : [],
+          [Symbol.dispose]: vi.fn(),
+        }
+      }),
     },
     sessionController: {
       selectModel: vi.fn(async (request: {
@@ -701,9 +705,46 @@ describe('TelegramBridge', () => {
     expect(reply.text).toContain('<b>1.1</b>　旧会话')
   })
 
+  it('/use reads registered sessions even when the global history scan fails', async () => {
+    const h = createHarness({}, {
+      workspaces: [{ path: '/telegram', title: 'telegram', sessionIds: ['s-good'] }],
+      sessions: [{ id: 's-good', cwd: '/telegram', title: '可读取的会话' }],
+    })
+    h.ctx.sessionQuery.listSessions.mockRejectedValue(new Error('unrelated historical header is corrupt'))
+    h.bridge.start()
+    await waitFor(() => h.polls.length > 0 ? true : undefined, 'polling')
+    h.client.getUpdates.mockResolvedValueOnce([update({ text: '/use' })])
+    const reply = await waitFor(() => h.sent[0], 'catalog reply')
+    expect(reply.text).toContain('可读取的会话')
+    expect(h.ctx.sessionQuery.observeSession).toHaveBeenCalledWith(SessionId('s-good'), {
+      signal: expect.any(AbortSignal), projectionMode: 'none',
+    })
+    const observation = await h.ctx.sessionQuery.observeSession.mock.results[0]!.value
+    expect(observation[Symbol.dispose]).toHaveBeenCalledOnce()
+  })
+
+  it('/use preserves numbering when one session cannot be read and still selects a healthy session', async () => {
+    const h = createHarness({}, {
+      workspaces: [{ path: '/telegram', title: 'telegram', sessionIds: ['s-bad', 's-good'] }],
+      sessions: [{ id: 's-good', cwd: '/telegram', title: '正常会话' }],
+    })
+    h.bridge.start()
+    await waitFor(() => h.polls.length > 0 ? true : undefined, 'polling')
+    h.client.getUpdates.mockResolvedValueOnce([update({ text: '/use' })])
+    const reply = await waitFor(() => h.sent[0], 'catalog reply')
+    expect(reply.text).toContain('<b>1.1</b>　s-bad　⚠️ 读取失败')
+    expect(reply.text).toContain('<b>1.2</b>　正常会话')
+    h.client.getUpdates.mockResolvedValueOnce([{ ...update({ text: '/use 1 1' }), update_id: 2 }])
+    await waitFor(() => h.sent.some(message => message.text.includes('会话 s-bad 读取失败')) ? true : undefined, 'read error')
+    expect(h.ctx.agents.resume).not.toHaveBeenCalled()
+    h.client.getUpdates.mockResolvedValueOnce([{ ...update({ text: '/use 1 2' }), update_id: 3 }])
+    await waitFor(() => h.ctx.agents.resume.mock.calls.length === 1 ? true : undefined, 'healthy session selected')
+    expect(h.ctx.agents.resume.mock.calls[0]?.[0]).toMatchObject({ resumeSessionId: 's-good' })
+  })
+
   it('/clear detaches and deletes the current JSONL session while retaining its workspace', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'dsh-telegram-clear-'))
-    const logPath = join(directory, 'session.jsonl')
+    const logPath = join(directory, 'session.v3.jsonl')
     await writeFile(logPath, '{}\n')
     try {
       const h = createHarness({}, {
@@ -734,7 +775,7 @@ describe('TelegramBridge', () => {
 
   it('/clear refuses to delete a Session whose lifecycle belongs to Web UI', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'dsh-telegram-borrowed-clear-'))
-    const logPath = join(directory, 'session.jsonl')
+    const logPath = join(directory, 'session.v3.jsonl')
     await writeFile(logPath, '{}\n')
     try {
       const h = createHarness({}, {

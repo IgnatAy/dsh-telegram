@@ -4,7 +4,7 @@
 
 A Telegram bot plugin for DeepSeek Harness. Chat with agents, switch workspaces and sessions, send images, and answer agent questions from Telegram. Uses long polling and shares sessions with the Web UI.
 
-Developed against **DeepSeek Harness v0.1.2-rc.1**.
+Developed against **DeepSeek Harness v0.1.5-rc.2**.
 
 ## Setup
 

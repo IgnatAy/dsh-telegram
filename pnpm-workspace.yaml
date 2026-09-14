@@ -3,3 +3,5 @@
 # non-interactive installs on unapproved build scripts, so approve it here.
 allowBuilds:
   esbuild: true
+  # rc2 JSONL backend used by integration tests.
+  koffi: true
