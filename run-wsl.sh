@@ -3,10 +3,11 @@
 # session stores. The bot starts unbound; users list and select through /use.
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "$0")" && pwd)"
 PROFILE="${DSH_TELEGRAM_PROFILE:-web}"
 DSH_ROOT="${DSH_HOME:-$HOME/.dsh}"
 
+# Match a literal tilde supplied through the environment.
+# shellcheck disable=SC2088
 case "$DSH_ROOT" in
   '~') DSH_ROOT="$HOME" ;;
   '~/'*) DSH_ROOT="$HOME/${DSH_ROOT#\~/}" ;;
@@ -17,8 +18,8 @@ if [ "$#" -gt 0 ]; then
   echo "usage: $0" >&2
   exit 2
 fi
-if ! command -v dsh >/dev/null 2>&1; then
-  echo "run: dsh is not on PATH" >&2
+if ! command -v npx >/dev/null 2>&1; then
+  echo "run: npx is not on PATH" >&2
   exit 1
 fi
 if [ -z "${DSH_TELEGRAM_TOKEN:-}" ]; then
@@ -41,5 +42,4 @@ echo "telegram startup selection: none (use /use in Telegram)"
 echo "telegram workspace/session state: $DSH_ROOT"
 echo "telegram profile: $PROFILE"
 
-cd "$ROOT"
-dsh --profile "$PROFILE" --patch "$ROOT/wsl.shared.patch.yml"
+exec npx @deepseek-ai/dsh --profile "$PROFILE"

@@ -20,6 +20,8 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DSH_HOME="${DSH_HOME:-$HOME/.dsh}"
+# Match a literal tilde supplied through the environment.
+# shellcheck disable=SC2088
 case "$DSH_HOME" in
   '~') DSH_HOME="$HOME" ;;
   '~/'*) DSH_HOME="$HOME/${DSH_HOME#\~/}" ;;
@@ -95,7 +97,7 @@ if [ "$ARG" = "uninstall" ]; then
   else
     echo "note: no telegram block found in $PATCH (remove the row manually if needed)"
   fi
-  echo "next: restart the profile (dsh --profile $PROFILE)"
+  echo "next: restart the profile (npx @deepseek-ai/dsh --profile $PROFILE)"
   exit 0
 fi
 
@@ -115,7 +117,11 @@ if [ ! -f "$ROOT/package.json" ]; then
   exit 1
 fi
 if [ ! -d "$PROFILE_DIR" ]; then
-  if [ "$PROFILE" = "telegram" ]; then
+  if [ "$PROFILE" = "web" ]; then
+    mkdir -p "$PROFILE_DIR"
+    printf '%s\n' '{"name":"dsh-profile-web","private":true,"dependencies":{},"dsh":{"profile":{"bundles":["@deepseek-ai/dsh-base","@deepseek-ai/dsh-web-app"],"patchReload":"live"}}}' > "$PROFILE_DIR/package.json"
+    printf '[]\n' > "$PROFILE_DIR/cordis.patch.yml"
+  elif [ "$PROFILE" = "telegram" ]; then
     init_telegram_profile "$PROFILE_DIR"
   else
     echo "install: profile '$PROFILE' not found at $PROFILE_DIR" >&2
@@ -216,7 +222,7 @@ if [ "$PROFILE" = "telegram" ]; then
 
 next steps:
   1. set DSH_TELEGRAM_TOKEN and DSH_TELEGRAM_ALLOWED_USER_IDS
-  2. start through ./run-wsl.sh; this profile uses the shared durable DSH history
+  2. start with npx @deepseek-ai/dsh --profile telegram
   3. uninstall later with:  bash scripts/install-copy.sh uninstall telegram
 EOF
 else
@@ -224,7 +230,7 @@ else
 
 next steps:
   1. restart the profile so the new composition loads:
-       dsh --profile $PROFILE
+       npx @deepseek-ai/dsh --profile $PROFILE
   2. set DSH_TELEGRAM_TOKEN and DSH_TELEGRAM_ALLOWED_USER_IDS first
   3. uninstall later with:  bash scripts/install-copy.sh uninstall $PROFILE
 EOF

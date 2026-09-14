@@ -6,31 +6,66 @@ A Telegram bot plugin for DeepSeek Harness. Chat with agents, switch workspaces 
 
 Developed against **DeepSeek Harness v0.1.5-rc.2**.
 
-## Setup
+## Install and start
 
-Requires Linux / WSL2 with Bash, Node.js 22.19+ (22.x) or 24+, and `dsh` on PATH. Configure your model credentials and the DSH `web` profile first, and create a workspace in the Web UI.
+Requires Linux / WSL2, Bash, and Node.js 22.19+ (22.x) or 24+ with npm/npx. **No global dsh installation, dsh on PATH, or DSH source directory is required.** Online installation also needs curl and tar.
 
-Run from this repository:
+Install or update from this repository in one command:
 
 ```bash
-bash setup-wsl.sh
-export DSH_TELEGRAM_TOKEN='<your BotFather token>'
-export DSH_TELEGRAM_ALLOWED_USER_IDS='<your numeric Telegram user ID>'
-bash run-wsl.sh
+bash install.sh
 ```
 
-Stop the existing `web` profile process before starting. The installer copies the included `lib/` build into the `web` profile; no dependency installation is needed. In a private chat with your bot, send `/use`, then `/use 1 1` to select a listed session or `/use 1 0` to create one. Send `/help` for all commands.
+Or install without cloning (available after these changes reach GitHub main):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/IgnatAy/dsh-telegram/main/install.sh | bash -s -- install
+```
+
+The installer copies the included build to `~/.dsh/profiles/web/node_modules/dsh-telegram` and registers it in the profile's `cordis.patch.yml`. It creates a missing web profile and preserves existing model settings, workspaces, and sessions. Installation does not start DSH or require pnpm.
+
+Set the bot environment in the terminal that starts DSH:
+
+```bash
+export DSH_TELEGRAM_TOKEN='<your BotFather token>'
+export DSH_TELEGRAM_ALLOWED_USER_IDS='<your numeric Telegram user ID>'
+```
+
+Start DSH as usual; Telegram and the Web UI run together. No wrapper or extra `--patch` is needed:
+
+```bash
+npx @deepseek-ai/dsh web
+```
+
+These variables must be present on every launch; set them again in new terminals or supply them through your existing environment configuration. Configure DSH model credentials and create a workspace in the Web UI first. Stop the running process before updating or uninstalling, then restart. Do not run two processes with the same bot token.
+
+Send `/use` in a private chat, then `/use 1 1` to select a session or `/use 1 0` to create one. Send `/help` for all commands.
+
+## Uninstall
+
+From this repository:
+
+```bash
+bash install.sh uninstall
+```
+
+Or online:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/IgnatAy/dsh-telegram/main/install.sh | bash -s -- uninstall
+```
+
+Only plugin files and installer-managed configuration are removed. DSH, model settings, workspaces, and history remain. Remove manually added Telegram configuration yourself.
+
+## Configuration and development
 
 | Environment variable | Purpose |
 | --- | --- |
-| `DSH_TELEGRAM_TOKEN` | Bot token from BotFather (required). |
-| `DSH_TELEGRAM_ALLOWED_USER_IDS` | Allowed numeric user IDs, separated by commas (required). |
-| `DSH_HOME` | DSH data directory; defaults to `~/.dsh`. |
+| `DSH_TELEGRAM_TOKEN` | BotFather token (required). |
+| `DSH_TELEGRAM_ALLOWED_USER_IDS` | Allowed numeric user IDs, comma-separated (required). |
+| `DSH_HOME` | DSH data directory, default `~/.dsh`; use the same value when installing, uninstalling, and starting. |
+| `DSH_TELEGRAM_PROFILE` | Installation target, default `web`; start other profiles with `npx @deepseek-ai/dsh --profile NAME`. |
 
-Only private chats are supported. Users outside the allowlist are denied. Keep tokens out of Git.
+Only private chats are supported; users outside the allowlist are denied. Keep tokens out of Git. Explicit targets are supported: `bash install.sh install web` / `bash install.sh uninstall web`.
 
-After source changes, run `pnpm install --frozen-lockfile` and `bash setup-wsl.sh --rebuild`, then restart. To uninstall:
-
-```bash
-bash scripts/install-copy.sh uninstall web
-```
+After source changes, run `pnpm install --frozen-lockfile`, then `bash setup-wsl.sh --rebuild` and restart DSH. The older setup and run scripts remain compatible; `run-wsl.sh` now launches through npx.

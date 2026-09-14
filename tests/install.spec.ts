@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -72,5 +72,88 @@ describe('profile copy installer', () => {
       expect(result.stderr).toContain('invalid profile name')
       expect(readFileSync(marker, 'utf8')).toBe('keep')
     }
+  })
+})
+
+
+describe('one-command entry point', () => {
+  const entry = fileURLToPath(new URL('../install.sh', import.meta.url))
+
+  it('creates a stock web profile, upgrades idempotently, and preserves settings on uninstall without dsh', () => {
+    const { home, env } = fixture()
+    // A dsh executable that fails makes accidental global CLI use visible.
+    const bin = join(home, 'bin')
+    mkdirSync(bin)
+    writeFileSync(join(bin, 'dsh'), '#!/bin/sh\nexit 97\n')
+    chmodSync(join(bin, 'dsh'), 0o755)
+    const run = (...args: string[]) => execFileSync('bash', [entry, ...args], {
+      env: { ...env, PATH: `${bin}:${process.env.PATH}` }, encoding: 'utf8', cwd: home,
+    })
+    run()
+    const profile = join(home, 'profiles/web')
+    const manifest = join(profile, 'package.json')
+    expect(JSON.parse(readFileSync(manifest, 'utf8')).dsh.profile).toEqual({
+      bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'], patchReload: 'live',
+    })
+    const originalManifest = readFileSync(manifest, 'utf8')
+    const patch = join(profile, 'cordis.patch.yml')
+    const custom = '\n- id: tools\n  config:\n    mode: native\n'
+    writeFileSync(patch, readFileSync(patch, 'utf8') + custom)
+    const history = join(home, 'history.jsonl')
+    writeFileSync(history, 'keep history')
+    run('install')
+    expect(readFileSync(patch, 'utf8').match(/    - id: telegram\n/g)).toHaveLength(1)
+    run('uninstall')
+    run('uninstall')
+    expect(existsSync(join(profile, 'node_modules/dsh-telegram'))).toBe(false)
+    expect(readFileSync(patch, 'utf8').trim()).toBe(custom.trim())
+    expect(readFileSync(manifest, 'utf8')).toBe(originalManifest)
+    expect(readFileSync(history, 'utf8')).toBe('keep history')
+  })
+
+  it('launches npx from the caller directory without a repository patch', () => {
+    const { home, env, run } = fixture()
+    run('web')
+    const bin = join(home, 'bin')
+    mkdirSync(bin)
+    writeFileSync(join(bin, 'npx'), '#!/bin/sh\npwd\nprintf "%s\\n" "$@"\n')
+    chmodSync(join(bin, 'npx'), 0o755)
+    const output = execFileSync('bash', [fileURLToPath(new URL('../run-wsl.sh', import.meta.url))], {
+      cwd: home, encoding: 'utf8', env: {
+        ...env, PATH: `${bin}:${process.env.PATH}`, DSH_TELEGRAM_TOKEN: 'test',
+        DSH_TELEGRAM_ALLOWED_USER_IDS: '123',
+      },
+    })
+    expect(output).toContain(home + '\n@deepseek-ai/dsh\n--profile\nweb\n')
+    expect(output).not.toContain('--patch')
+  })
+
+  it('installs and uninstalls through stdin using a downloaded snapshot', () => {
+    const { home, env } = fixture()
+    const root = fileURLToPath(new URL('../', import.meta.url))
+    const archive = join(home, 'snapshot.tar.gz')
+    execFileSync('tar', ['-czf', archive, '-C', root, './install.sh', './setup-wsl.sh', './scripts', './lib', './package.json', './cordis.patch.yml'])
+    const bin = join(home, 'bin')
+    mkdirSync(bin)
+    // Stand in for curl only; exercise real extraction and installer execution.
+    writeFileSync(join(bin, 'curl'), '#!/bin/sh\ncp "$TEST_ARCHIVE" "$4"\n')
+    chmodSync(join(bin, 'curl'), 0o755)
+    const source = readFileSync(entry, 'utf8')
+    const options = {
+      input: source, cwd: home, encoding: 'utf8' as const,
+      env: { ...env, PATH: `${bin}:${process.env.PATH}`, TEST_ARCHIVE: archive },
+    }
+    execFileSync('bash', ['-s', '--', 'install'], options)
+    const installed = join(home, 'profiles/web/node_modules/dsh-telegram/lib/index.js')
+    expect(existsSync(installed)).toBe(true)
+    execFileSync('bash', ['-s', '--', 'uninstall'], options)
+    expect(existsSync(installed)).toBe(false)
+  })
+
+  it('rejects unknown actions before writing profile files', () => {
+    const { home, env } = fixture()
+    const result = spawnSync('bash', [entry, 'remove'], { env, encoding: 'utf8' })
+    expect(result.status).toBe(2)
+    expect(existsSync(join(home, 'profiles'))).toBe(false)
   })
 })

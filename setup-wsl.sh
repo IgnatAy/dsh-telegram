@@ -11,12 +11,10 @@ if [ -n "$REBUILD" ] && [ "$REBUILD" != "--rebuild" ]; then
   exit 2
 fi
 
-for command in node dsh; do
-  if ! command -v "$command" >/dev/null 2>&1; then
-    echo "setup: required command not found: $command" >&2
-    exit 1
-  fi
-done
+if ! command -v node >/dev/null 2>&1; then
+  echo "setup: required command not found: node" >&2
+  exit 1
+fi
 
 NODE_MAJOR="$(node -p 'process.versions.node.split(".")[0]')"
 NODE_MINOR="$(node -p 'process.versions.node.split(".")[1]')"
@@ -41,5 +39,5 @@ cat <<'EOF'
 setup complete. Start the bot with:
   export DSH_TELEGRAM_TOKEN='<BotFather token>'
   export DSH_TELEGRAM_ALLOWED_USER_IDS='<comma-separated Telegram user ids>'
-  ./run-wsl.sh
+  npx @deepseek-ai/dsh web
 EOF
