@@ -132,6 +132,8 @@ export interface TelegramClientOptions {
     baseUrl?: string;
     /** Long-polling timeout in seconds; production default is 30. */
     pollingTimeoutSec?: number;
+    /** Deadline for a complete API response, including its JSON body. Defaults to 15 seconds. */
+    requestTimeoutMs?: number;
 }
 /** Structured API failure; tokens are redacted before constructing this error. */
 export declare class TelegramApiError extends Error {
@@ -149,6 +151,7 @@ export declare class TelegramClient implements TelegramClientLike {
     private readonly baseUrl;
     /** Long-polling timeout in seconds; controls each getUpdates call. */
     readonly pollingTimeoutSec: number;
+    private readonly requestTimeoutMs;
     /**
      * @param token - bot token from @BotFather.
      * @param options - client options.
@@ -159,6 +162,8 @@ export declare class TelegramClient implements TelegramClientLike {
     private fileUrl;
     /** POST `method` with `body`; throws on transport failure or a non-ok response. */
     private call;
+    /** A stalled fetch/body must never hold the chat's delivery queue indefinitely. */
+    private requestWithin;
     /**
      * Fetch the bot identity; fails when the token is invalid.
      * @returns the bot user object.

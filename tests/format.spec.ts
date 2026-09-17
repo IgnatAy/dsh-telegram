@@ -199,3 +199,52 @@ describe('escaped code fences in numbered replies', () => {
     expect(markdownToHtml('    ```\nwww\\.example.com\n    ```')).toBe('<pre>www\\.example.com</pre>')
   })
 })
+
+describe('phone screenshot formatting regressions', () => {
+  it('renders emphasis, combined emphasis and strike without stray markers', () => {
+    expect(markdownToHtml('*斜体* ***粗斜体*** ~~删除~~ _斜体_ __粗体__')).toBe(
+      '<i>斜体</i> <b><i>粗斜体</i></b> <s>删除</s> <i>斜体</i> <b>粗体</b>',
+    )
+    expect(markdownToHtml('**粗体里 `代码` 和 *斜体***')).toBe(
+      '<b>粗体里 </b><code>代码</code><b> 和 </b><b><i>斜体</i></b>',
+    )
+  })
+
+  it('preserves escapes, identifiers and code contents', () => {
+    expect(markdownToHtml(String.raw`\*不是斜体\* foo_bar_baz \_普通\_`)).toBe('*不是斜体* foo_bar_baz _普通_')
+    expect(markdownToHtml('`*x* ~~y~~`')).toBe('<code>*x* ~~y~~</code>')
+    expect(markdownToHtml('**a `**` b**')).toBe('<b>a </b><code>**</code><b> b</b>')
+  })
+
+  it('turns images into descriptive links without a dangling exclamation mark', () => {
+    expect(markdownToHtml('![示例](https://example.com/image.png)')).toBe('<a href="https://example.com/image.png">图片：示例</a>')
+  })
+
+  it('renders continuous quotes, alerts and flattened nested quotes', () => {
+    expect(markdownToHtml('> [!WARNING]\n> **小心**\n>> 第二行')).toBe(
+      '<blockquote><b>警告</b>\n<b>小心</b>\n第二行</blockquote>',
+    )
+    expect(markdownToHtml('嵌套： > - 文字')).toBe('嵌套： &gt; - 文字')
+  })
+
+  it('renders dividers and indented code while protecting literal HTML', () => {
+    expect(markdownToHtml('上方\n\n---\n\n下方')).toBe('上方\n\n────────\n\n下方')
+    expect(markdownToHtml('    <b>代码</b>\n    *原样*\n\n正文')).toBe('<pre>&lt;b&gt;代码&lt;/b&gt;\n*原样*</pre>\n\n正文')
+    expect(markdownToHtml('<b>HTML</b>')).toBe('&lt;b&gt;HTML&lt;/b&gt;')
+  })
+
+  it('keeps quotes and styles balanced when split', () => {
+    const source = '> [!NOTE]\n> ***长内容😀长内容***\n> ~~删除内容~~'
+    const chunks = markdownToHtmlChunks(source, 6)
+    expect(chunks.map(chunk => chunk.plain).join('')).toBe('提示\n长内容😀长内容\n删除内容')
+    for (const chunk of chunks) {
+      expect(chunk.plain.length).toBeLessThanOrEqual(6)
+      const stack: string[] = []
+      for (const tag of chunk.html.matchAll(/<(\/?)(blockquote|b|i|s)>/g)) {
+        if (tag[1]) expect(stack.pop()).toBe(tag[2])
+        else stack.push(tag[2])
+      }
+      expect(stack).toEqual([])
+    }
+  })
+})

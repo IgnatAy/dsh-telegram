@@ -47,7 +47,7 @@ function inlineRuns(text: string, bold = false, allowLinks = true): Run[] {
     }
     // Accept a backslash before the opening parenthesis (common model output),
     // and balanced parentheses within URLs, including escaped ones.
-    const link = allowLinks ? /^\[([^\]\n]+)\]\\?\(/.exec(rest) : null
+    const link = allowLinks ? /^(!?)\[([^\]\n]+)\]\\?\(/.exec(rest) : null
     if (link) {
       let end = i + link[0].length
       let depth = 1
@@ -63,7 +63,7 @@ function inlineRuns(text: string, bold = false, allowLinks = true): Run[] {
       const destination = /^(?:<([^<>]+)>|(\S+?))(?:\s+"[^"\n]*")?$/.exec(target)
       const url = destination?.[1] ?? destination?.[2]
       if (depth === 0 && url && /^(?:https?:\/\/|tg:\/\/|mailto:)[^\s<>]+$/i.test(url)) {
-        for (const label of inlineRuns(link[1], bold, false)) {
+        for (const label of inlineRuns(link[1] ? `图片：${link[2]}` : link[2], bold, false)) {
           // Telegram does not permit code entities nested inside links.
           result.push(run(label.text, `<a href="${escapeHtml(url)}">${label.open === '<code>' ? '' : label.open}`,
             `${label.close === '</code>' ? '' : label.close}</a>`))
@@ -72,11 +72,31 @@ function inlineRuns(text: string, bold = false, allowLinks = true): Run[] {
         continue
       }
     }
-    if (rest.startsWith('**')) {
-      const end = text.indexOf('**', i + 2)
-      if (end > i + 2 && !text.slice(i + 2, end).includes('\n')) {
-        result.push(...inlineRuns(text.slice(i + 2, end), true, allowLinks))
-        i = end + 2
+    // A conservative, balanced emphasis subset; never style inside code.
+    const marker = /^(\*{1,3}|_{1,3}|~~)/.exec(rest)?.[0]
+    if (marker && !/\s/.test(text[i + marker.length] ?? ' ')
+      && !(marker[0] === '_' && /[\p{L}\p{N}]/u.test(text[i - 1] ?? ''))) {
+      let end = i + marker.length
+      for (; end < text.length; end++) {
+        if (text[end] === '\\') { end++; continue }
+        if (text[end] === '`') {
+          const codeSpan = /^(`+)([^\n]*?)\1(?!`)/.exec(text.slice(end))
+          if (codeSpan) { end += codeSpan[0].length - 1; continue }
+        }
+        if (marker.length === 2 && marker !== '~~' && text.startsWith(marker + marker[0], end)) end++
+        if (text.startsWith(marker, end) && !/\s/.test(text[end - 1])
+          && !(marker[0] === '_' && /[\p{L}\p{N}]/u.test(text[end + marker.length] ?? ''))) break
+      }
+      if (end < text.length && !text.slice(i, end).includes('\n')) {
+        const tags = marker === '~~' ? ['s'] : marker.length === 3 ? ['b', 'i']
+          : marker.length === 2 ? ['b'] : ['i']
+        for (const part of inlineRuns(text.slice(i + marker.length, end), bold, allowLinks)) {
+          const wrappers = tags.filter(tag => !part.open.includes(`<${tag}>`))
+          result.push(part.open === '<code>' ? part : run(part.text,
+            wrappers.map(tag => `<${tag}>`).join('') + part.open,
+            part.close + wrappers.slice().reverse().map(tag => `</${tag}>`).join('')))
+        }
+        i = end + marker.length
         continue
       }
     }
@@ -188,6 +208,43 @@ function markdownRuns(text: string): Run[] {
       result.push(run(lines.slice(i).join('\n')))
       break
     }
+    // Flatten nested quotes: Telegram text messages cannot nest blockquotes.
+    if (/^ {0,3}>/.test(line)) {
+      const quoted: string[] = []
+      while (i < lines.length && /^ {0,3}>/.test(lines[i])) {
+        quoted.push(lines[i].replace(/^(?: {0,3}>[ \t]?)+/, ''))
+        i++
+      }
+      i--
+      const alerts: Record<string, string> = {
+        NOTE: '提示', TIP: '建议', IMPORTANT: '重要', WARNING: '警告', CAUTION: '注意',
+      }
+      const alert = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]$/.exec(quoted[0])
+      if (alert) quoted[0] = `**${alerts[alert[1]]}**`
+      for (const part of markdownRuns(quoted.join('\n'))) {
+        result.push(run(part.text, '<blockquote>' + part.open, part.close + '</blockquote>'))
+      }
+      if (i < lines.length - 1) result.push(run('\n'))
+      continue
+    }
+    if (/^(?: {4}|\t)/.test(line) && (i === 0 || !lines[i - 1].trim())) {
+      const code: string[] = []
+      let end = i
+      while (end < lines.length && (/^(?: {4}|\t)/.test(lines[end]) || !lines[end].trim())) {
+        code.push(lines[end].replace(/^(?: {4}|\t)/, ''))
+        end++
+      }
+      while (code.length && !code.at(-1)!.trim()) { code.pop(); end-- }
+      result.push(run(code.join('\n'), '<pre>', '</pre>'))
+      i = end - 1
+      if (i < lines.length - 1) result.push(run('\n'))
+      continue
+    }
+    if (/^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/.test(line)) {
+      result.push(run('────────'))
+      if (i < lines.length - 1) result.push(run('\n'))
+      continue
+    }
     const header = tableCells(line)
     const separator = tableCells(lines[i + 1] ?? '')
     if (header && separator?.length === header.length && separator.every(cell => /^:?-{3,}:?$/.test(cell))) {
@@ -212,9 +269,9 @@ function renderRun(part: Run): string {
   return part.text ? part.open + escapeHtml(part.text) + part.close : ''
 }
 
-/** Convert headings, links, bold, code and tables to supported Telegram HTML. */
+/** Convert the supported Markdown subset to independently splittable Telegram HTML. */
 export function markdownToHtml(text: string): string {
-  return markdownRuns(text).map(renderRun).join('')
+  return markdownRuns(text).map(renderRun).join('').replace(/<\/blockquote><blockquote>/g, '')
 }
 
 /** One independently valid Telegram message in HTML and plain-text forms. */
@@ -231,7 +288,10 @@ export function markdownToHtmlChunks(text: string, maxLength: number): TelegramM
   const chunks: TelegramMessageChunk[] = []
   let current = { html: '', plain: '' }
   const flush = (): void => {
-    if (current.plain) chunks.push(current)
+    if (current.plain) {
+      current.html = current.html.replace(/<\/blockquote><blockquote>/g, '')
+      chunks.push(current)
+    }
     current = { html: '', plain: '' }
   }
   for (const part of markdownRuns(text)) {

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Bound Telegram API requests, including response-body reads, so a stalled request cannot permanently block subsequent replies. Draft requests time out after 5 seconds; other calls after 15 seconds, with additional time for long polling. Long rate-limit delays are reported instead of silently holding the delivery queue.
+- Add consecutive-turn and stalled-response regressions for reply delivery.
 - Stream DSH assistant events into native Telegram rich drafts, with thinking, tool preparation, tool execution, elapsed time, and a collapsed recent tool history in rich answers.
 - Coalesce preview updates, renew long-running drafts, and fall back to plain drafts or one edited progress message when the server rejects newer methods.
 - Connect native Stop controls to the current Agent; reject stale draft controls and stop preview updates during user questions, cancellation, session changes, and shutdown.

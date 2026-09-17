@@ -16,6 +16,42 @@ function jsonResponse(payload: unknown, status = 200): Response {
 }
 
 describe('TelegramClient', () => {
+  it.each(['fetch', 'body'])('bounds a stalled %s even when the transport ignores cancellation', async (stage) => {
+    vi.useFakeTimers()
+    try {
+      const fetchImpl = fetchMock(async () => {
+        if (stage === 'fetch') return new Promise<Response>(() => {})
+        return { json: () => new Promise(() => {}), ok: true, status: 200 } as unknown as Response
+      })
+      const client = new TelegramClient('t:ok', { fetch: fetchImpl, requestTimeoutMs: 100 })
+      const result = client.sendRichMessage(7, '<p>answer</p>').catch(error => error)
+      await vi.advanceTimersByTimeAsync(100)
+      expect(await result).toMatchObject({ message: expect.stringContaining('timed out after 100ms') })
+      expect(fetchImpl.mock.calls[0]?.[1]?.signal?.aborted).toBe(true)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { vi.useRealTimers() }
+  })
+
+  it('allows long polling to wait its configured server timeout', async () => {
+    vi.useFakeTimers()
+    try {
+      const fetchImpl = fetchMock(() => new Promise<Response>(() => {}))
+      const client = new TelegramClient('t:ok', { fetch: fetchImpl, requestTimeoutMs: 100, pollingTimeoutSec: 30 })
+      const result = client.getUpdates().catch(error => error)
+      await vi.advanceTimersByTimeAsync(30000)
+      expect(fetchImpl.mock.calls[0]?.[1]?.signal?.aborted).toBe(false)
+      await vi.advanceTimersByTimeAsync(100)
+      expect(await result).toMatchObject({ message: expect.stringContaining('timed out after 30100ms') })
+    } finally { vi.useRealTimers() }
+  })
+
+  it('does not silently hold the delivery queue for a long flood-control delay', async () => {
+    const fetchImpl = fetchMock(async () => jsonResponse({ ok: false, error_code: 429, parameters: { retry_after: 600 } }, 429))
+    const client = new TelegramClient('t:ok', { fetch: fetchImpl })
+    await expect(client.sendMessage(7, 'answer')).rejects.toMatchObject({ code: 429, retryAfter: 600 })
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
+
   it('sends native draft controls and persists rich content through the matching method', async () => {
     const fetchImpl = fetchMock(async () => jsonResponse({ ok: true, result: true }))
     const client = new TelegramClient('t:ok', { fetch: fetchImpl })
@@ -57,7 +93,7 @@ describe('TelegramClient', () => {
   it('cancels a flood-control wait when the bridge stops', async () => {
     vi.useFakeTimers()
     try {
-      const fetchImpl = fetchMock(async () => jsonResponse({ ok: false, error_code: 429, parameters: { retry_after: 60 } }, 429))
+      const fetchImpl = fetchMock(async () => jsonResponse({ ok: false, error_code: 429, parameters: { retry_after: 30 } }, 429))
       const client = new TelegramClient('t:ok', { fetch: fetchImpl })
       const controller = new AbortController()
       const sent = client.sendMessage(7, 'answer', undefined, controller.signal).catch(error => error)
@@ -121,7 +157,10 @@ describe('TelegramClient', () => {
     const client = new TelegramClient('t:ok', { fetch: fetchImpl as typeof fetch })
     const controller = new AbortController()
     await client.getUpdates(undefined, controller.signal)
-    expect((fetchImpl.mock.calls[0]?.[1] as RequestInit).signal).toBe(controller.signal)
+    const requestSignal = (fetchImpl.mock.calls[0]?.[1] as RequestInit).signal
+    expect(requestSignal?.aborted).toBe(false)
+    controller.abort()
+    expect(requestSignal?.aborted).toBe(true)
   })
 
   it('sendMessage forwards parse mode only when requested', async () => {

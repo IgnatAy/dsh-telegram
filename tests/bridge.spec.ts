@@ -3,7 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { TelegramBridge } from '../src/bridge.ts'
 import type { TelegramBridgeOptions } from '../src/bridge.ts'
 import type { TelegramClientLike, TelegramDownloadedFile, TelegramMessage, TelegramReplyMarkup, TelegramUpdate } from '../src/client.ts'
-import { TelegramApiError } from '../src/client.ts'
+import { TelegramApiError, TelegramClient } from '../src/client.ts'
 import type { ImageAttachmentLimits, ImageAttachmentRef, SaveImageAttachment } from '@deepseek-ai/dsh-attachment'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { LlmCallConfig, LlmResolvedModelInfo } from '@deepseek-ai/dsh-llm'
@@ -541,6 +541,52 @@ function inlineKeyboard(message: Harness['sent'][number]): { inline_keyboard: re
 }
 
 describe('TelegramBridge', () => {
+  it('recovers later turns when Telegram receives the first answer but its HTTP response stalls', async () => {
+    const h = createHarness()
+    const delivered: string[] = []
+    const transport = vi.fn(async (_url: unknown, init?: RequestInit): Promise<Response> => {
+      delivered.push(JSON.parse(init!.body as string).rich_message.html)
+      if (delivered.length === 1) return new Promise(() => {})
+      return new Response(JSON.stringify({ ok: true, result: { message_id: 900 + delivered.length } }))
+    })
+    const api = new TelegramClient('t:ok', { fetch: transport, requestTimeoutMs: 100 })
+    h.client.sendRichMessage = api.sendRichMessage.bind(api)
+    h.client.sendRichMessageDraft = vi.fn(async () => true)
+    h.bridge.start()
+    const handle = await selectNew(h)
+    const id = handle.agent.session.id
+    for (let turn = 1; turn <= 3; turn++) {
+      h.emit(id, { type: 'turn/start', data: { turn } } as SessionEvent)
+      h.emit(id, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: `answer ${turn}` }] } } } as SessionEvent)
+      h.emit(id, { type: 'turn/end', data: { turn, reason: { kind: 'completed' } } } as SessionEvent)
+    }
+    await waitFor(() => h.actions.length === 3 ? true : undefined, 'typing remains responsive')
+    await waitFor(() => delivered.length === 3 ? true : undefined, 'later replies after stalled response')
+    expect(delivered).toEqual(['<p>answer 1</p>', '<p>answer 2</p>', '<p>answer 3</p>'])
+    expect(h.ctx.logger.error).toHaveBeenCalledWith('[telegram] session event failed: %s', expect.stringContaining('timed out'))
+  })
+
+  it('delivers consecutive rich replies on the same binding after earlier turns finish', async () => {
+    const h = createHarness()
+    const drafts = vi.fn(async () => true)
+    const rich = vi.fn(async () => ({ message_id: 900 + rich.mock.calls.length, chat: { id: 7, type: 'private' }, date: 0 }))
+    h.client.sendRichMessageDraft = drafts
+    h.client.sendRichMessage = rich
+    h.bridge.start()
+    const handle = await selectNew(h)
+    const id = handle.agent.session.id
+    for (let turn = 1; turn <= 3; turn++) {
+      h.emit(id, { type: 'turn/start', data: { turn } } as SessionEvent)
+      await waitFor(() => drafts.mock.calls.length === turn ? true : undefined, `turn ${turn} draft`)
+      h.emit(id, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: `answer ${turn}` }] } } } as SessionEvent)
+      h.emit(id, { type: 'turn/end', data: { turn, reason: { kind: 'completed' } } } as SessionEvent)
+      await waitFor(() => rich.mock.calls.length === turn ? true : undefined, `turn ${turn} answer`)
+      await settle()
+    }
+    expect(rich.mock.calls.map(call => call[1])).toEqual(['<p>answer 1</p>', '<p>answer 2</p>', '<p>answer 3</p>'])
+    expect(h.client.deleteMessages).not.toHaveBeenCalled()
+  })
+
   it('falls back to the existing answer renderer when rich persistence is rejected', async () => {
     const h = createHarness()
     h.client.sendRichMessageDraft = vi.fn(async () => true)

@@ -156,6 +156,8 @@ export interface TelegramClientOptions {
   baseUrl?: string
   /** Long-polling timeout in seconds; production default is 30. */
   pollingTimeoutSec?: number
+  /** Deadline for a complete API response, including its JSON body. Defaults to 15 seconds. */
+  requestTimeoutMs?: number
 }
 
 interface TelegramApiResponse<T> {
@@ -195,6 +197,7 @@ export class TelegramClient implements TelegramClientLike {
   private readonly baseUrl: string
   /** Long-polling timeout in seconds; controls each getUpdates call. */
   readonly pollingTimeoutSec: number
+  private readonly requestTimeoutMs: number
 
   /**
    * @param token - bot token from @BotFather.
@@ -211,6 +214,10 @@ export class TelegramClient implements TelegramClientLike {
     this.fetchImpl = options.fetch ?? globalThis.fetch
     this.baseUrl = (options.baseUrl ?? 'https://api.telegram.org').replace(/\/+$/, '')
     this.pollingTimeoutSec = pollingTimeoutSec
+    this.requestTimeoutMs = options.requestTimeoutMs ?? 15000
+    if (!Number.isSafeInteger(this.requestTimeoutMs) || this.requestTimeoutMs < 1) {
+      throw new RangeError('telegram client: requestTimeoutMs must be a positive integer')
+    }
   }
 
   private url(method: string): string {
@@ -225,21 +232,31 @@ export class TelegramClient implements TelegramClientLike {
   /** POST `method` with `body`; throws on transport failure or a non-ok response. */
   private async call<T>(method: string, body: Record<string, unknown>, signal?: AbortSignal, retries = 0): Promise<T> {
     let response: Response
-    try {
-      response = await this.fetchImpl(this.url(method), {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-        signal,
-      })
-    } catch (error) {
-      throw new Error(`telegram ${method} transport error: ${redactedMessage(error, this.token)}`)
-    }
     let payload: TelegramApiResponse<T> | null
     try {
-      payload = await response.json() as TelegramApiResponse<T>
-    } catch {
-      payload = null
+      const timeout = method === 'getUpdates'
+        ? this.pollingTimeoutSec * 1000 + this.requestTimeoutMs
+        : method.endsWith('Draft') ? Math.min(5000, this.requestTimeoutMs) : this.requestTimeoutMs
+      const result = await this.requestWithin(timeout, signal, async requestSignal => {
+        const response = await this.fetchImpl(this.url(method), {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+          signal: requestSignal,
+        })
+        let payload: TelegramApiResponse<T> | null
+        try {
+          payload = await response.json() as TelegramApiResponse<T>
+        } catch {
+          requestSignal.throwIfAborted()
+          payload = null
+        }
+        return { response, payload }
+      })
+      response = result.response
+      payload = result.payload
+    } catch (error) {
+      throw new Error(`telegram ${method} transport error: ${redactedMessage(error, this.token)}`)
     }
     if (!response.ok || payload?.ok !== true) {
       const description = payload?.description
@@ -249,7 +266,7 @@ export class TelegramClient implements TelegramClientLike {
       // Only explicit flood-control rejections are safe to retry: transport failures
       // may have delivered a message already. Drafts are retried by the coalescer.
       if (code === 429 && retries < 2 && !method.endsWith('Draft')
-        && typeof retryAfter === 'number' && Number.isFinite(retryAfter) && retryAfter >= 0) {
+        && typeof retryAfter === 'number' && Number.isFinite(retryAfter) && retryAfter >= 0 && retryAfter <= 30) {
         await new Promise<void>((resolve, reject) => {
           const onAbort = (): void => { clearTimeout(timer); reject(signal?.reason ?? new Error('aborted')) }
           const timer = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve() }, Math.max(1000, retryAfter * 1000))
@@ -264,6 +281,28 @@ export class TelegramClient implements TelegramClientLike {
       throw new Error(`telegram ${method} failed: response omitted result`)
     }
     return payload.result as T
+  }
+
+  /** A stalled fetch/body must never hold the chat's delivery queue indefinitely. */
+  private async requestWithin<T>(timeoutMs: number, signal: AbortSignal | undefined,
+    task: (signal: AbortSignal) => Promise<T>): Promise<T> {
+    const timeout = new AbortController()
+    const combined = signal === undefined ? timeout.signal : AbortSignal.any([signal, timeout.signal])
+    const timer = setTimeout(() => timeout.abort(new Error(`request timed out after ${timeoutMs}ms`)), timeoutMs)
+    let onAbort: (() => void) | undefined
+    try {
+      combined.throwIfAborted()
+      const cancelled = new Promise<never>((_resolve, reject) => {
+        onAbort = () => reject(combined.reason)
+        combined.addEventListener('abort', onAbort, { once: true })
+      })
+      // The race also covers transports that ignore cancellation or never finish
+      // reading their response body. The real fetch still receives the abort.
+      return await Promise.race([task(combined), cancelled])
+    } finally {
+      clearTimeout(timer)
+      if (onAbort !== undefined) combined.removeEventListener('abort', onAbort)
+    }
   }
 
   /**

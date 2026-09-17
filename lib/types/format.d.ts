@@ -9,7 +9,7 @@
  * @returns the HTML-escaped text.
  */
 export declare function escapeHtml(text: string): string;
-/** Convert headings, links, bold, code and tables to supported Telegram HTML. */
+/** Convert the supported Markdown subset to independently splittable Telegram HTML. */
 export declare function markdownToHtml(text: string): string;
 /** One independently valid Telegram message in HTML and plain-text forms. */
 export interface TelegramMessageChunk {
