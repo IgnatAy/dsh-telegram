@@ -58,7 +58,7 @@ interface Harness {
     on: Mock
     get: Mock
     agents: { create: Mock; resume: Mock; get: Mock }
-    attachments: { imageLimits: ImageAttachmentLimits; validateImage: Mock; saveImages: Mock }
+    attachments: { imageLimits: ImageAttachmentLimits; validateImage: Mock; saveImages: Mock; saveFile: Mock }
     llm: { listProviders: Mock; listModels: Mock; resolveModelInfo: Mock; resolveCallConfig: Mock }
     sessionPersistence: { resolveCurrentLog: Mock; stat: Mock; open: Mock }
     sessionQuery: { listSessions: Mock; observeSession: Mock }
@@ -359,6 +359,11 @@ function createHarness(
       get: vi.fn((id: string) => liveAgents.get(String(id))),
     },
     attachments: {
+      saveFile: vi.fn(async (input: { data: Uint8Array; name: string }) => ({
+        attachmentId: 'telegram-file-test',
+        name: input.name,
+        bytes: input.data.byteLength,
+      })),
       imageLimits: {
         maxImageBytes: 10 * 1024 * 1024,
         maxImagesPerMessage: 8,
@@ -1239,26 +1244,45 @@ describe('TelegramBridge', () => {
       .toBe('完成以后再检查测试')
   })
 
-  it('rejects unsupported Telegram documents without delivering them to DSH', async () => {
-    const h = createHarness()
-    h.bridge.start()
-    await waitFor(() => h.polls.length > 0 ? true : undefined, 'polling')
-    h.client.getUpdates.mockResolvedValueOnce([{ ...update({
-      document: {
-        file_id: 'pdf-file',
-        file_unique_id: 'pdf-unique',
-        file_name: 'notes.pdf',
-        mime_type: 'application/pdf',
-      },
-    }), update_id: 1 }])
-    const notice = await waitFor(
-      () => h.sent.find(message => message.text.includes('**不支持此文件**') && message.text.includes('notes.pdf')),
-      'unsupported-document notice',
-    )
-    expect(notice.text).toContain('PNG、JPEG、WebP、GIF')
-    expect(h.client.downloadFile).not.toHaveBeenCalled()
-    expect(h.agents).toHaveLength(0)
-  })
+  it.each(['direct', 'reply', 'collect', 'followup'] as const)(
+    'delivers non-image documents through native DSH file attachments (%s)',
+    async (mode) => {
+      const h = createHarness()
+      h.bridge.start()
+      await waitFor(() => h.polls.length > 0 ? true : undefined, 'polling')
+      const active = await selectNew(h)
+      const document = {
+        file_id: 'pdf-file', file_unique_id: 'pdf-unique',
+        file_name: 'notes.pdf', mime_type: 'application/pdf',
+      }
+      const data = new TextEncoder().encode('%PDF-1.7 test document')
+      h.client.downloadFile.mockResolvedValueOnce({
+        file: { ...document, file_path: 'documents/notes.pdf' }, data,
+      })
+      if (mode === 'collect') {
+        h.client.getUpdates.mockResolvedValueOnce([{ ...update({ text: '/collect' }), update_id: 2 }])
+        await waitFor(() => h.sent.find(message => message.text.includes('已进入收集模式')), 'collection')
+      }
+      h.client.getUpdates.mockResolvedValueOnce([{ ...update(mode === 'reply'
+        ? { text: '/followup 分析这个文件', reply_to_message: {
+            message_id: 21, chat: { id: 100, type: 'private' }, document,
+          } }
+        : { document, ...(mode === 'followup' ? { caption: '/followup 分析这个文件' } : {}) }),
+        update_id: 3,
+      }])
+      if (mode === 'collect') {
+        await waitFor(() => h.ctx.attachments.saveFile.mock.calls.length === 1 ? true : undefined, 'file saved')
+        h.client.getUpdates.mockResolvedValueOnce([{ ...update({ text: '/followup' }), update_id: 4 }])
+      }
+      await waitFor(() => active.agent.followup.mock.calls.length === 1 ? true : undefined, 'file delivered')
+      expect(h.ctx.attachments.saveFile).toHaveBeenCalledWith({ data, name: 'notes.pdf' })
+      expect(h.ctx.attachments.validateImage).not.toHaveBeenCalled()
+      const input = active.agent.followup.mock.calls[0]?.[0] as { content: unknown[] }
+      expect(input.content).toContainEqual({
+        type: 'file', attachment: { attachmentId: 'telegram-file-test', name: 'notes.pdf', bytes: data.byteLength },
+      })
+    },
+  )
 
   it('accepts standalone images and treats image/text sequences in either order as ordinary delivery', async () => {
     const workspacePath = await mkdtemp(join(tmpdir(), 'dsh-telegram-image-'))

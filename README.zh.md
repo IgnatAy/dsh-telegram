@@ -2,7 +2,9 @@
 
 [English](README.md)
 
-DeepSeek Harness 的 Telegram Bot 插件。支持与 Agent 对话、切换工作区和会话、发送图片及回答 Agent 提问。通过长轮询运行，与 Web UI 共享会话。
+DeepSeek Harness 的 Telegram Bot 插件。支持与 Agent 对话、切换工作区和会话、发送图片、文件及回答 Agent 提问。通过长轮询运行，与 Web UI 共享会话。
+
+Telegram 普通文件通过 dsh 原生文件附件接口提交，支持引用消息和收集模式。单个文件下载上限为 20 MiB。
 
 需要越过工作区限制等权限审批时，当前会话会在 Telegram 显示工具、调用编号和申请原因，并提供“仅允许本次”和“拒绝”按钮。只有点击允许按钮才会授权；普通文字不会授予权限。`/cancel`、`/skip`、停止任务或切换会话会取消申请；发送失败会返回不可用，不会默认放行。
 

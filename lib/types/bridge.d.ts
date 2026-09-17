@@ -106,12 +106,10 @@ export declare class TelegramBridge {
     private collectionFor;
     /** Summarize an in-progress collection without exposing internal attachment ids. */
     private collectionStatus;
-    /** Telegram documents are admitted only when their declaration plausibly names a supported raster. */
+    /** Route declared raster documents through the existing image pipeline. */
     private imageDocument;
     /** Extract one full-resolution download candidate from a Telegram message. */
     private imageCandidate;
-    /** Explain the native DSH attachment boundary instead of silently dropping a document. */
-    private unsupportedDocument;
     /** Explicit `/followup`: submit one message, or submit the active collection as a later turn. */
     private handleFollowupMessage;
     /** Add one Telegram message and its reply context to an explicit collection. */
@@ -126,6 +124,8 @@ export declare class TelegramBridge {
      * delimiter, so no context can leak into a different turn.
      */
     private telegramMessageParts;
+    /** Admit generic documents through DSH's native file attachment store. */
+    private telegramFilePart;
     /** Download, verify, and save one image beneath the selected workspace. */
     private downloadWorkspaceImage;
     /** Create an exclusive file under `<workspace>/telegram-downloads` without following an escaping directory link. */

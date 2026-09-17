@@ -10,7 +10,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent, AgentHandle, ModelSelection } from '@deepseek-ai/dsh-agent'
 import type { SessionSelectModelValue } from '@deepseek-ai/dsh-api-session-controller'
-import type { ImageMediaType } from '@deepseek-ai/dsh-attachment'
+import type { FileAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, LlmModelInfo, LlmResolvedModelInfo } from '@deepseek-ai/dsh-llm'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
@@ -135,6 +135,7 @@ interface DownloadedWorkspaceImage {
 type CollectedPart =
   | { readonly type: 'text'; readonly text: string }
   | { readonly type: 'image'; readonly image: DownloadedWorkspaceImage }
+  | { readonly type: 'file'; readonly attachment: FileAttachmentRef }
 
 /** One collection is permanently bound to the session where it began. */
 interface TelegramCollection {
@@ -311,7 +312,7 @@ const FOLLOWUP_HELP = [
   '',
   '---',
   '',
-  '- 回复一条文字或图片后发送 `/followup`，可将引用内容加入队列。',
+  '- 回复一条文字、图片或文件后发送 `/followup`，可将引用内容加入队列。',
   '- 收集模式中单独发送 `/followup`，会提交全部收集内容。',
 ].join('\n')
 
@@ -331,7 +332,7 @@ const HELP_TEXT = [
   '',
   '| 命令 | 作用 |',
   '| :--- | :--- |',
-  '| /collect | 开始收集文字和图片 |',
+  '| /collect | 开始收集文字、图片和文件 |',
   '| /send | 提交收集内容，可附加文字 |',
   '| /discard | 放弃本次收集 |',
   '| /followup | 将内容排到当前任务之后 |',
@@ -350,7 +351,7 @@ const HELP_TEXT = [
   '',
   '- **空闲时**：发送消息开启任务。',
   '- **运行中**：发送消息作为插话。',
-  '- **图片**：可附带说明，多段内容可先使用 /collect。',
+  '- **图片与文件**：可附带说明，多段内容可先使用 /collect。文件下载上限为 20 MiB。',
   '- **停止任务**：点击 Telegram 生成预览上的停止按钮。',
   '',
   '## 回答 Agent',
@@ -375,7 +376,7 @@ const MY_COMMANDS = [
   { command: 'new', description: '在当前工作区新建会话' },
   { command: 'archive', description: '归档当前会话，保留聊天记录' },
   { command: 'clear', description: '永久删除当前会话' },
-  { command: 'collect', description: '收集多段文字与图片' },
+  { command: 'collect', description: '收集文字、图片与文件' },
   { command: 'send', description: '提交收集内容' },
   { command: 'discard', description: '放弃本次收集' },
   { command: 'followup', description: '将消息排到当前任务之后' },
@@ -561,13 +562,6 @@ function quotedTextBlock(message: TelegramMessage, hasImage: boolean): string {
     ? hasImage ? '（引用了一张图片）' : '（引用消息没有可提取的文字）'
     : truncateText(original, MAX_QUOTED_TEXT_LENGTH).split('\n').map(line => `> ${line}`).join('\n')
   return `${header}\n${body}`
-}
-
-/** Internal routing error rendered as a user-facing unsupported-file notice. */
-class UnsupportedTelegramDocumentError extends Error {
-  constructor(readonly documentMessage: TelegramMessage) {
-    super('Telegram document is not a supported raster image')
-  }
 }
 
 /**
@@ -867,10 +861,6 @@ export class TelegramBridge {
       await this.handleCommand(message, text ?? '')
       return
     }
-    if (message.document !== undefined && !this.imageDocument(message)) {
-      await this.unsupportedDocument(message)
-      return
-    }
     const active = this.chats.get(String(message.chat.id))?.active
     if (active === undefined) {
       await this.safeSend(message.chat.id, '⚠️ **尚未选择会话**\n\n发送 /menu，选择工作区和会话，或点击“新建会话”。')
@@ -889,7 +879,7 @@ export class TelegramBridge {
     }
 
     const hasImage = this.imageCandidate(message) !== undefined
-    if (!hasImage && message.text === undefined && message.reply_to_message === undefined) return
+    if (!hasImage && message.document === undefined && message.text === undefined && message.reply_to_message === undefined) return
     await this.submitTelegramMessage(active, message, 'default')
   }
 
@@ -975,7 +965,7 @@ export class TelegramBridge {
         })
         await this.safeSend(
           chatId,
-          `📥 **已进入收集模式**\n\n现在可以按任意顺序发送文字和图片。\n\n---\n\n${COLLECTION_ACTIONS}`,
+          `📥 **已进入收集模式**\n\n现在可以按任意顺序发送文字、图片和文件。\n\n---\n\n${COLLECTION_ACTIONS}`,
         )
         break
       }
@@ -1217,11 +1207,12 @@ export class TelegramBridge {
   /** Summarize an in-progress collection without exposing internal attachment ids. */
   private collectionStatus(collection: TelegramCollection, prefix = '已加入收集'): string {
     const textCount = collection.parts.filter(part => part.type === 'text' && part.text.trim() !== '').length
+    const fileCount = collection.parts.filter(part => part.type === 'file').length
     const imageCount = collection.parts.filter(part => part.type === 'image').length
-    return `📥 **${prefix}**\n\n| 内容 | 数量 |\n| :--- | ---: |\n| 文字 | ${textCount} 段 |\n| 图片 | ${imageCount} 张 |\n\n---\n\n${COLLECTION_ACTIONS}`
+    return `📥 **${prefix}**\n\n| 内容 | 数量 |\n| :--- | ---: |\n| 文字 | ${textCount} 段 |\n| 图片 | ${imageCount} 张 |\n| 文件 | ${fileCount} 个 |\n\n---\n\n${COLLECTION_ACTIONS}`
   }
 
-  /** Telegram documents are admitted only when their declaration plausibly names a supported raster. */
+  /** Route declared raster documents through the existing image pipeline. */
   private imageDocument(message: TelegramMessage): boolean {
     const document = message.document
     if (document === undefined) return false
@@ -1254,16 +1245,6 @@ export class TelegramBridge {
     }
   }
 
-  /** Explain the native DSH attachment boundary instead of silently dropping a document. */
-  private async unsupportedDocument(message: TelegramMessage): Promise<void> {
-    const document = message.document
-    const label = document?.file_name ?? document?.mime_type ?? '该文件'
-    await this.safeSend(
-      message.chat.id,
-      `🚫 **不支持此文件**\n\n${richLiteral(truncateText(label, 160))}\n\n当前只接受 PNG、JPEG、WebP、GIF 图片；PDF、DOCX、压缩包、音频和视频不会发送给 Agent。`,
-    )
-  }
-
   /** Explicit `/followup`: submit one message, or submit the active collection as a later turn. */
   private async handleFollowupMessage(
     active: ActiveChatSession,
@@ -1272,7 +1253,7 @@ export class TelegramBridge {
   ): Promise<void> {
     const collection = this.collectionFor(active)
     if (collection !== undefined) {
-      const hasAttachedContent = this.imageCandidate(message) !== undefined
+      const hasAttachedContent = message.document !== undefined || this.imageCandidate(message) !== undefined
         || message.reply_to_message !== undefined
         || argsText !== ''
       if (hasAttachedContent) {
@@ -1282,7 +1263,7 @@ export class TelegramBridge {
       await this.submitCollection(active, collection, 'followup')
       return
     }
-    const hasContent = argsText !== ''
+    const hasContent = message.document !== undefined || argsText !== ''
       || this.imageCandidate(message) !== undefined
       || message.reply_to_message !== undefined
     if (!hasContent) {
@@ -1300,14 +1281,10 @@ export class TelegramBridge {
     overrideText?: string,
     announce = true,
   ): Promise<boolean> {
-    if (message.document !== undefined && !this.imageDocument(message)) {
-      await this.unsupportedDocument(message)
-      return false
-    }
     try {
       const parts = await this.telegramMessageParts(active, message, overrideText)
       if (parts.length === 0) {
-        await this.safeSend(message.chat.id, 'ℹ️ **没有可收集的内容**\n\n这条消息没有文字或受支持图片。')
+        await this.safeSend(message.chat.id, 'ℹ️ **没有可收集的内容**\n\n这条消息没有文字、图片或文件。')
         return false
       }
       const currentImages = collection.parts.filter(part => part.type === 'image')
@@ -1328,11 +1305,7 @@ export class TelegramBridge {
       if (announce) await this.safeSend(message.chat.id, this.collectionStatus(collection))
       return true
     } catch (error) {
-      if (error instanceof UnsupportedTelegramDocumentError) {
-        await this.unsupportedDocument(error.documentMessage)
-      } else {
-        await this.safeSend(message.chat.id, `⚠️ **收集失败**\n\n${richCodeBlock(messageOf(error))}`)
-      }
+      await this.safeSend(message.chat.id, `⚠️ **收集失败**\n\n${richCodeBlock(messageOf(error))}`)
       return false
     }
   }
@@ -1344,7 +1317,7 @@ export class TelegramBridge {
     mode: DeliveryMode,
   ): Promise<void> {
     if (collection.parts.length === 0) {
-      await this.safeSend(active.chatId, 'ℹ️ **收集内容为空**\n\n请先发送文字或图片。')
+      await this.safeSend(active.chatId, 'ℹ️ **收集内容为空**\n\n请先发送文字、图片或文件。')
       return
     }
     try {
@@ -1371,11 +1344,7 @@ export class TelegramBridge {
       if (parts.length === 0) return
       await this.submitParts(active, parts, mode)
     } catch (error) {
-      if (error instanceof UnsupportedTelegramDocumentError) {
-        await this.unsupportedDocument(error.documentMessage)
-      } else {
-        await this.safeSend(message.chat.id, `⚠️ **消息处理失败**\n\n${richCodeBlock(messageOf(error))}`)
-      }
+      await this.safeSend(message.chat.id, `⚠️ **消息处理失败**\n\n${richCodeBlock(messageOf(error))}`)
     }
   }
 
@@ -1389,17 +1358,13 @@ export class TelegramBridge {
     message: TelegramMessage,
     overrideText?: string,
   ): Promise<CollectedPart[]> {
-    if (message.document !== undefined && !this.imageDocument(message)) {
-      throw new UnsupportedTelegramDocumentError(message)
-    }
     const parts: CollectedPart[] = []
     const reply = message.reply_to_message
     if (reply !== undefined) {
-      if (reply.document !== undefined && !this.imageDocument(reply)) {
-        throw new UnsupportedTelegramDocumentError(reply)
-      }
       const replyCandidate = this.imageCandidate(reply)
       parts.push({ type: 'text', text: quotedTextBlock(reply, replyCandidate !== undefined) })
+      const replyFile = await this.telegramFilePart(reply)
+      if (replyFile !== undefined) parts.push(replyFile)
       if (replyCandidate !== undefined) {
         const image = await this.downloadWorkspaceImage(active, replyCandidate)
         parts.push({ type: 'text', text: `[Telegram 引用图片已保存到工作区：${image.relativePath}]` })
@@ -1407,6 +1372,8 @@ export class TelegramBridge {
       }
     }
 
+    const filePart = await this.telegramFilePart(message)
+    if (filePart !== undefined) parts.push(filePart)
     const candidate = this.imageCandidate(message)
     if (candidate !== undefined) {
       const image = await this.downloadWorkspaceImage(active, candidate)
@@ -1421,6 +1388,22 @@ export class TelegramBridge {
       parts.push({ type: 'text', text: '请继续处理我在 Telegram 中引用的内容。' })
     }
     return parts
+  }
+
+  /** Admit generic documents through DSH's native file attachment store. */
+  private async telegramFilePart(message: TelegramMessage): Promise<CollectedPart | undefined> {
+    const document = message.document
+    if (document === undefined || this.imageDocument(message)) return undefined
+    const downloaded = await this.client.downloadFile(
+      document.file_id,
+      20 * 1024 * 1024,
+      this.abortController.signal,
+    )
+    const attachment = await this.ctx.attachments.saveFile({
+      data: downloaded.data,
+      name: document.file_name ?? `telegram-file-${message.message_id}`,
+    })
+    return { type: 'file', attachment }
   }
 
   /** Download, verify, and save one image beneath the selected workspace. */
@@ -1516,6 +1499,7 @@ export class TelegramBridge {
     let imageIndex = 0
     const content: ContentBlock[] = parts.flatMap((part): ContentBlock[] => {
       if (part.type === 'text') return part.text.trim() === '' ? [] : [{ type: 'text', text: part.text }]
+      if (part.type === 'file') return [{ type: 'file', attachment: part.attachment }]
       const attachment = refs[imageIndex]
       imageIndex += 1
       return attachment === undefined ? [] : [{ type: 'image', attachment }]

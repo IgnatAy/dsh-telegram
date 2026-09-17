@@ -35,7 +35,7 @@ export interface TelegramPhotoSize extends TelegramFileReference {
   readonly height: number
 }
 
-/** A general Telegram document; the bridge admits only supported raster images. */
+/** A general Telegram document, including images and arbitrary files. */
 export interface TelegramDocument extends TelegramFileReference {
   readonly file_name?: string
   readonly mime_type?: string
