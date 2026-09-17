@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Mock } from 'vitest'
-import { TelegramClient } from '../src/client.ts'
+import { TelegramApiError, TelegramClient } from '../src/client.ts'
 
 /** Mock with a fetch-shaped call signature: keeps mock.calls typed and the value assignable. */
 type FetchSeam = Mock<(url: string | URL, init?: RequestInit) => Promise<Response>>
@@ -16,6 +16,59 @@ function jsonResponse(payload: unknown, status = 200): Response {
 }
 
 describe('TelegramClient', () => {
+  it('sends native draft controls and persists rich content through the matching method', async () => {
+    const fetchImpl = fetchMock(async () => jsonResponse({ ok: true, result: true }))
+    const client = new TelegramClient('t:ok', { fetch: fetchImpl })
+    await client.sendMessageDraft(7, 11, '')
+    await client.sendRichMessageDraft(7, 11, '<tg-thinking>搜索中</tg-thinking>')
+    await client.sendRichMessage(7, '<p>完成</p>')
+    const bodies = fetchImpl.mock.calls.map(call => JSON.parse(call[1]!.body as string))
+    expect(bodies[0]).toEqual({ chat_id: 7, draft_id: 11, text: '', can_stop: true })
+    expect(bodies[1]).toEqual({ chat_id: 7, draft_id: 11, rich_message: { html: '<tg-thinking>搜索中</tg-thinking>' }, can_stop: true })
+    expect(bodies[2]).toEqual({ chat_id: 7, rich_message: { html: '<p>完成</p>' } })
+  })
+
+  it('returns structured draft flood control without blocking the latest-preview queue', async () => {
+    const fetchImpl = fetchMock(async () => jsonResponse({ ok: false, error_code: 429,
+      description: 't:ok rate limited', parameters: { retry_after: 3 } }, 429))
+    const client = new TelegramClient('t:ok', { fetch: fetchImpl })
+    const error = await client.sendMessageDraft(7, 1, 'text').catch(error => error)
+    expect(error).toBeInstanceOf(TelegramApiError)
+    expect(error).toMatchObject({ code: 429, retryAfter: 3 })
+    expect(error.message).not.toContain('t:ok')
+    expect(fetchImpl).toHaveBeenCalledTimes(1)
+  })
+
+  it('retries an explicitly rejected final message after retry_after', async () => {
+    vi.useFakeTimers()
+    try {
+      const fetchImpl = fetchMock(async () => jsonResponse({ ok: true, result: { message_id: 1 } }))
+      fetchImpl.mockResolvedValueOnce(jsonResponse({ ok: false, error_code: 429, parameters: { retry_after: 2 } }, 429))
+      const client = new TelegramClient('t:ok', { fetch: fetchImpl })
+      const sent = client.sendMessage(7, 'answer')
+      await vi.advanceTimersByTimeAsync(1999)
+      expect(fetchImpl).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(1)
+      await expect(sent).resolves.toMatchObject({ message_id: 1 })
+      expect(fetchImpl).toHaveBeenCalledTimes(2)
+    } finally { vi.useRealTimers() }
+  })
+
+  it('cancels a flood-control wait when the bridge stops', async () => {
+    vi.useFakeTimers()
+    try {
+      const fetchImpl = fetchMock(async () => jsonResponse({ ok: false, error_code: 429, parameters: { retry_after: 60 } }, 429))
+      const client = new TelegramClient('t:ok', { fetch: fetchImpl })
+      const controller = new AbortController()
+      const sent = client.sendMessage(7, 'answer', undefined, controller.signal).catch(error => error)
+      await vi.advanceTimersByTimeAsync(0)
+      controller.abort(new Error('stopped'))
+      expect(await sent).toMatchObject({ message: 'stopped' })
+      expect(fetchImpl).toHaveBeenCalledTimes(1)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally { vi.useRealTimers() }
+  })
+
   it('rejects an empty token', () => {
     expect(() => new TelegramClient('')).toThrow('token must not be empty')
   })
@@ -52,7 +105,7 @@ describe('TelegramClient', () => {
     const client = new TelegramClient('t:ok', { fetch: fetchImpl as typeof fetch, pollingTimeoutSec: 15 })
     await client.getUpdates(42)
     const body = JSON.parse((fetchImpl.mock.calls[0]?.[1] as RequestInit).body as string) as Record<string, unknown>
-    expect(body).toMatchObject({ offset: 42, timeout: 15, allowed_updates: ['message', 'callback_query'] })
+    expect(body).toMatchObject({ offset: 42, timeout: 15, allowed_updates: ['message', 'callback_query', 'stopped_message_generation'] })
   })
 
   it('getUpdates omits offset when starting fresh', async () => {

@@ -3,6 +3,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { TelegramBridge } from '../src/bridge.ts'
 import type { TelegramBridgeOptions } from '../src/bridge.ts'
 import type { TelegramClientLike, TelegramDownloadedFile, TelegramMessage, TelegramReplyMarkup, TelegramUpdate } from '../src/client.ts'
+import { TelegramApiError } from '../src/client.ts'
 import type { ImageAttachmentLimits, ImageAttachmentRef, SaveImageAttachment } from '@deepseek-ai/dsh-attachment'
 import { ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import type { LlmCallConfig, LlmResolvedModelInfo } from '@deepseek-ai/dsh-llm'
@@ -540,6 +541,92 @@ function inlineKeyboard(message: Harness['sent'][number]): { inline_keyboard: re
 }
 
 describe('TelegramBridge', () => {
+  it('falls back to the existing answer renderer when rich persistence is rejected', async () => {
+    const h = createHarness()
+    h.client.sendRichMessageDraft = vi.fn(async () => true)
+    h.client.sendRichMessage = vi.fn(async () => { throw new TelegramApiError('unsupported rich message', 400) })
+    h.bridge.start()
+    const handle = await selectNew(h)
+    h.emit(handle.agent.session.id, { type: 'turn/start', data: { turn: 1 } } as SessionEvent)
+    h.emit(handle.agent.session.id, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '**完整答案**' }] } } } as SessionEvent)
+    h.emit(handle.agent.session.id, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } } as SessionEvent)
+    await waitFor(() => h.sent.length ? true : undefined, 'fallback answer')
+    expect(h.sent).toHaveLength(1)
+    expect(h.sent[0]?.text).toBe('<b>完整答案</b>')
+  })
+
+  it('clears a failed draft with a terminal notice even when no text was produced', async () => {
+    const h = createHarness()
+    const draft = vi.fn(async () => true)
+    h.client.sendMessageDraft = draft
+    h.bridge.start()
+    const handle = await selectNew(h)
+    h.emit(handle.agent.session.id, { type: 'turn/start', data: { turn: 1 } } as SessionEvent)
+    await waitFor(() => draft.mock.calls.length ? true : undefined, 'draft before failure')
+    h.emit(handle.agent.session.id, { type: 'turn/end', data: { turn: 1, reason: { kind: 'error', error: { message: 'private error', code: 'UNKNOWN' } } } } as SessionEvent)
+    await waitFor(() => h.sent.length ? true : undefined, 'terminal failure notice')
+    expect(h.sent[0]?.text).toContain('任务执行失败')
+    expect(h.sent[0]?.text).not.toContain('private error')
+  })
+
+  it('streams the bound agent, persists one rich final, and releases its stream listener', async () => {
+    const h = createHarness()
+    const draft = vi.fn(async () => true)
+    const rich = vi.fn(async () => ({ message_id: 900, chat: { id: 7, type: 'private' }, date: 0 }))
+    h.client.sendRichMessageDraft = draft
+    h.client.sendRichMessage = rich
+    h.bridge.start()
+    const handle = await selectNew(h)
+    const id = handle.agent.session.id
+    h.emit(id, { type: 'turn/start', data: { turn: 1 } } as SessionEvent)
+    const listener = handle.agent.handlers.get('agent/assistant-stream')?.[0]
+    expect(listener).toBeDefined()
+    const publish = listener as unknown as (payload: unknown) => void
+    publish({ agent: handle.agent, frame: { type: 'start', attemptId: 'a', revision: 1, turn: 1, step: 1 } })
+    publish({ agent: handle.agent, frame: { type: 'chunk', attemptId: 'a', revision: 2, index: 0, time: Date.now(),
+      chunk: { type: 'text-delta', index: 0, text: '逐步出现' } } })
+    await waitFor(() => draft.mock.calls.length ? true : undefined, 'native preview')
+    expect(draft.mock.calls[0]?.[2]).toContain('逐步出现')
+    h.emit(id, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '最终答案' }] } } } as SessionEvent)
+    h.emit(id, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } } as SessionEvent)
+    await waitFor(() => rich.mock.calls.length ? true : undefined, 'persisted rich answer')
+    expect(rich).toHaveBeenCalledTimes(1)
+    expect(h.client.sendMessage).not.toHaveBeenCalled()
+    expect(rich.mock.calls[0]?.[1]).toContain('最终答案')
+    await h.bridge.stop()
+    expect(handle.agent.handlers.get('agent/assistant-stream')).toHaveLength(0)
+  })
+
+  it('only accepts a native stop for the current private draft and rejects stale stops', async () => {
+    const h = createHarness({ allowedUserIds: [7, 42] })
+    const draft = vi.fn(async () => true)
+    h.client.sendMessageDraft = draft
+    h.bridge.start()
+    const handle = await selectNew(h)
+    handle.agent.status = 'running'
+    const id = handle.agent.session.id
+    h.emit(id, { type: 'turn/start', data: { turn: 1 } } as SessionEvent)
+    await waitFor(() => draft.mock.calls.length ? true : undefined, 'first draft')
+    const oldId = draft.mock.calls[0]?.[1]
+    h.emit(id, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } } as SessionEvent)
+    h.emit(id, { type: 'turn/start', data: { turn: 2 } } as SessionEvent)
+    await waitFor(() => draft.mock.calls.length === 2 ? true : undefined, 'new draft')
+    const draftId = draft.mock.calls[1]?.[1]
+    h.client.getUpdates.mockResolvedValueOnce([
+      { update_id: 2, stopped_message_generation: { chat: { id: 7, type: 'private' }, draft_id: oldId } },
+      { update_id: 3, stopped_message_generation: { chat: { id: 7, type: 'group' }, draft_id: draftId } },
+      { update_id: 4, stopped_message_generation: { chat: { id: 7, type: 'private' }, draft_id: draftId, message_thread_id: 2 } },
+    ])
+    await waitFor(() => h.polls.includes(5) ? true : undefined, 'invalid stops processed')
+    expect(handle.agent.cancel).not.toHaveBeenCalled()
+    h.client.getUpdates.mockResolvedValueOnce([
+      { update_id: 5, stopped_message_generation: { chat: { id: 7, type: 'private' }, draft_id: draftId } },
+    ])
+    await waitFor(() => handle.agent.cancel.mock.calls.length ? true : undefined, 'native cancellation')
+    expect(handle.agent.cancel).toHaveBeenCalledWith({ kind: 'user' })
+    await waitFor(() => h.sent.some(message => message.text.includes('已中断')) ? true : undefined, 'stop acknowledgement')
+  })
+
   it('start registers the session listener and begins polling', async () => {
     const h = createHarness()
     h.bridge.start()

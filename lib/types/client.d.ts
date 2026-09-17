@@ -86,9 +86,18 @@ export interface TelegramUpdate {
     readonly update_id: number;
     readonly message?: TelegramMessage;
     readonly callback_query?: TelegramCallbackQuery;
+    readonly stopped_message_generation?: {
+        readonly chat: TelegramChat;
+        readonly draft_id: number;
+        readonly message_thread_id?: number;
+    };
 }
 /** Runtime seam surface tests substitute with a fake. */
 export interface TelegramClientLike {
+    /** Optional for older adapters; native private-chat previews expire after 30 seconds. */
+    sendMessageDraft?(chatId: number, draftId: number, text: string, signal?: AbortSignal): Promise<boolean>;
+    sendRichMessageDraft?(chatId: number, draftId: number, html: string, signal?: AbortSignal): Promise<boolean>;
+    sendRichMessage?(chatId: number, html: string, signal?: AbortSignal): Promise<TelegramMessage>;
     /** Fetch the bot identity; validates the token. */
     getMe(signal?: AbortSignal): Promise<TelegramUser>;
     /** Long-poll for updates at or after `offset`. */
@@ -123,6 +132,12 @@ export interface TelegramClientOptions {
     baseUrl?: string;
     /** Long-polling timeout in seconds; production default is 30. */
     pollingTimeoutSec?: number;
+}
+/** Structured API failure; tokens are redacted before constructing this error. */
+export declare class TelegramApiError extends Error {
+    readonly code: number;
+    readonly retryAfter?: number | undefined;
+    constructor(message: string, code: number, retryAfter?: number | undefined);
 }
 /**
  * Minimal Bot API client. All methods throw on transport failure or a
@@ -172,6 +187,9 @@ export declare class TelegramClient implements TelegramClientLike {
      * @returns whether the action was accepted.
      */
     sendChatAction(chatId: number, action: string, signal?: AbortSignal): Promise<boolean>;
+    sendMessageDraft(chatId: number, draftId: number, text: string, signal?: AbortSignal): Promise<boolean>;
+    sendRichMessageDraft(chatId: number, draftId: number, html: string, signal?: AbortSignal): Promise<boolean>;
+    sendRichMessage(chatId: number, html: string, signal?: AbortSignal): Promise<TelegramMessage>;
     /**
      * Register the bot's slash-command list; Telegram shows it in the `/` menu.
      * @param commands - `{ command, description }` pairs (command without the leading slash).

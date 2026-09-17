@@ -100,10 +100,19 @@ export interface TelegramUpdate {
   readonly update_id: number
   readonly message?: TelegramMessage
   readonly callback_query?: TelegramCallbackQuery
+  readonly stopped_message_generation?: {
+    readonly chat: TelegramChat
+    readonly draft_id: number
+    readonly message_thread_id?: number
+  }
 }
 
 /** Runtime seam surface tests substitute with a fake. */
 export interface TelegramClientLike {
+  /** Optional for older adapters; native private-chat previews expire after 30 seconds. */
+  sendMessageDraft?(chatId: number, draftId: number, text: string, signal?: AbortSignal): Promise<boolean>
+  sendRichMessageDraft?(chatId: number, draftId: number, html: string, signal?: AbortSignal): Promise<boolean>
+  sendRichMessage?(chatId: number, html: string, signal?: AbortSignal): Promise<TelegramMessage>
   /** Fetch the bot identity; validates the token. */
   getMe(signal?: AbortSignal): Promise<TelegramUser>
   /** Long-poll for updates at or after `offset`. */
@@ -153,6 +162,16 @@ interface TelegramApiResponse<T> {
   ok?: boolean
   result?: T
   description?: string
+  error_code?: number
+  parameters?: { retry_after?: number }
+}
+
+/** Structured API failure; tokens are redacted before constructing this error. */
+export class TelegramApiError extends Error {
+  constructor(message: string, readonly code: number, readonly retryAfter?: number) {
+    super(message)
+    this.name = 'TelegramApiError'
+  }
 }
 
 /** Replace the token with a placeholder in an error text. */
@@ -204,7 +223,7 @@ export class TelegramClient implements TelegramClientLike {
   }
 
   /** POST `method` with `body`; throws on transport failure or a non-ok response. */
-  private async call<T>(method: string, body: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
+  private async call<T>(method: string, body: Record<string, unknown>, signal?: AbortSignal, retries = 0): Promise<T> {
     let response: Response
     try {
       response = await this.fetchImpl(this.url(method), {
@@ -225,7 +244,21 @@ export class TelegramClient implements TelegramClientLike {
     if (!response.ok || payload?.ok !== true) {
       const description = payload?.description
         ?? (payload === null ? `invalid JSON response (HTTP ${response.status})` : `HTTP ${response.status}`)
-      throw new Error(`telegram ${method} failed: ${redactToken(description, this.token)}`)
+      const code = payload?.error_code ?? response.status
+      const retryAfter = payload?.parameters?.retry_after
+      // Only explicit flood-control rejections are safe to retry: transport failures
+      // may have delivered a message already. Drafts are retried by the coalescer.
+      if (code === 429 && retries < 2 && !method.endsWith('Draft')
+        && typeof retryAfter === 'number' && Number.isFinite(retryAfter) && retryAfter >= 0) {
+        await new Promise<void>((resolve, reject) => {
+          const onAbort = (): void => { clearTimeout(timer); reject(signal?.reason ?? new Error('aborted')) }
+          const timer = setTimeout(() => { signal?.removeEventListener('abort', onAbort); resolve() }, Math.max(1000, retryAfter * 1000))
+          if (signal?.aborted) onAbort()
+          else signal?.addEventListener('abort', onAbort, { once: true })
+        })
+        return this.call<T>(method, body, signal, retries + 1)
+      }
+      throw new TelegramApiError(`telegram ${method} failed: ${redactToken(description, this.token)}`, code, retryAfter)
     }
     if (!Object.hasOwn(payload, 'result')) {
       throw new Error(`telegram ${method} failed: response omitted result`)
@@ -250,7 +283,7 @@ export class TelegramClient implements TelegramClientLike {
   getUpdates(offset?: number, signal?: AbortSignal): Promise<TelegramUpdate[]> {
     const body: Record<string, unknown> = {
       timeout: this.pollingTimeoutSec,
-      allowed_updates: ['message', 'callback_query'],
+      allowed_updates: ['message', 'callback_query', 'stopped_message_generation'],
     }
     if (offset !== undefined) body.offset = offset
     return this.call<TelegramUpdate[]>('getUpdates', body, signal)
@@ -285,6 +318,20 @@ export class TelegramClient implements TelegramClientLike {
    */
   sendChatAction(chatId: number, action: string, signal?: AbortSignal): Promise<boolean> {
     return this.call<boolean>('sendChatAction', { chat_id: chatId, action }, signal)
+  }
+
+  sendMessageDraft(chatId: number, draftId: number, text: string, signal?: AbortSignal): Promise<boolean> {
+    return this.call('sendMessageDraft', { chat_id: chatId, draft_id: draftId, text, can_stop: true }, signal)
+  }
+
+  sendRichMessageDraft(chatId: number, draftId: number, html: string, signal?: AbortSignal): Promise<boolean> {
+    return this.call('sendRichMessageDraft', {
+      chat_id: chatId, draft_id: draftId, rich_message: { html }, can_stop: true,
+    }, signal)
+  }
+
+  sendRichMessage(chatId: number, html: string, signal?: AbortSignal): Promise<TelegramMessage> {
+    return this.call('sendRichMessage', { chat_id: chatId, rich_message: { html } }, signal)
   }
 
   /**

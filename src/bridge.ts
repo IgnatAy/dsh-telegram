@@ -28,7 +28,7 @@ import type {} from '@deepseek-ai/dsh-session-query'
 import type {} from '@deepseek-ai/dsh-system-prompt'
 import type { Workspace } from '@deepseek-ai/dsh-workspace'
 import type {} from '@deepseek-ai/dsh-workspace'
-import { TelegramClient } from './client.js'
+import { TelegramApiError, TelegramClient } from './client.js'
 import type {
   TelegramCallbackQuery,
   TelegramClientLike,
@@ -40,6 +40,7 @@ import type {
   TelegramUser,
 } from './client.js'
 import { markdownToHtml, markdownToHtmlChunks } from './format.js'
+import { TelegramProgress } from './progress.js'
 
 /** Reasoning levels accepted by the plugin's static configuration schema. */
 export type TelegramReasoningEffort = 'off' | 'low' | 'high' | 'max'
@@ -96,6 +97,7 @@ interface ActiveChatSession {
   queue: Promise<void>
   /** Typing-heartbeat interval handle; undefined while idle. */
   typingTimer: NodeJS.Timeout | undefined
+  progress?: TelegramProgress
   /** Remove Telegram-only prompt and interaction listeners without stopping the Agent. */
   readonly releaseBinding: () => void
 }
@@ -607,7 +609,10 @@ export class TelegramBridge {
     }
     const entries = [...this.chatsBySession.values()]
     const owned = [...this.ownedAgents.values()]
-    for (const entry of entries) this.stopTyping(entry)
+    for (const entry of entries) {
+      this.stopTyping(entry)
+      entry.progress?.dispose()
+    }
     await Promise.allSettled([
       ...(this.pollTask === undefined ? [] : [this.pollTask]),
       ...(this.commandTask === undefined ? [] : [this.commandTask]),
@@ -664,6 +669,21 @@ export class TelegramBridge {
   }
 
   private async handleUpdate(update: TelegramUpdate): Promise<void> {
+    const stopped = update.stopped_message_generation
+    if (stopped !== undefined) {
+      const active = this.chats.get(String(stopped.chat.id))?.active
+      // Telegram supplies no sender on this update. Only the matching live
+      // private-chat draft is allowed to cancel the bound Agent.
+      if (stopped.chat.type === 'private' && stopped.message_thread_id === undefined
+        && active?.progress?.acceptsStop(stopped.draft_id)
+        && (this.allowAllUsers || this.allowedUserIds.has(stopped.chat.id))) {
+        active.progress.stopByUser()
+        this.stopTyping(active)
+        if (active.agent.status === 'running') active.agent.cancel({ kind: 'user' })
+        await this.enqueue(active, () => this.safeSend(active.chatId, '⏹ **已中断当前任务**').then(() => {}))
+      }
+      return
+    }
     if (update.callback_query !== undefined) {
       await this.handleCallbackQuery(update.callback_query)
       return
@@ -872,6 +892,7 @@ export class TelegramBridge {
         // Kill the typing heartbeat first so Telegram's "typing…" indicator
         // dies out (~5s after the last action) instead of being renewed.
         this.stopTyping(active)
+        active.progress?.stopByUser()
         // Abort the live turn with a user cancellation cause; queued
         // follow-ups are discarded too. The aborted turn/end cleans up the
         // progress message and never delivers the partial answer.
@@ -882,7 +903,7 @@ export class TelegramBridge {
           ))
         }
         if (active.agent.status === 'running') active.agent.cancel({ kind: 'user' })
-        await this.safeSend(chatId, '⏹ **已中断当前任务**')
+        await this.enqueue(active, () => this.safeSend(chatId, '⏹ **已中断当前任务**').then(() => {}))
         break
       }
       case '/collect': {
@@ -1813,6 +1834,7 @@ export class TelegramBridge {
     state.active = undefined
     this.chatsBySession.delete(active.sessionId)
     this.stopTyping(active)
+    active.progress?.dispose()
     await active.queue
     try {
       await this.cleanupTurnMessages(active, true)
@@ -1872,7 +1894,12 @@ export class TelegramBridge {
       text: TELEGRAM_CHANNEL_PROMPT,
     })
     let disposeQuestions: (() => boolean) | undefined
+    let disposeStream: (() => boolean) | undefined
     try {
+      disposeStream = agent.ctx.on('agent/assistant-stream', ({ frame }) => {
+        const active = this.chats.get(String(chatId))?.active
+        if (active?.agent === agent) active.progress?.stream(frame)
+      })
       const questionEvents = agent.ctx as unknown as UserQuestionEventContext
       disposeQuestions = questionEvents.on(
         'user-questions/request',
@@ -1884,6 +1911,7 @@ export class TelegramBridge {
         { prepend: true },
       )
     } catch (error) {
+      disposeStream?.()
       disposePrompt()
       throw error
     }
@@ -1892,6 +1920,7 @@ export class TelegramBridge {
       if (released) return
       released = true
       disposeQuestions?.()
+      disposeStream?.()
       disposePrompt()
     }
   }
@@ -1945,6 +1974,7 @@ export class TelegramBridge {
       }
       request.signal?.addEventListener('abort', pending.onAbort, { once: true })
       this.pendingQuestions.set(key, pending)
+      this.chats.get(key)?.active?.progress?.suspend()
       void this.presentQuestion(pending).catch((error: unknown) => {
         const aborted = request.signal?.aborted === true || this.stopped
         this.rejectPendingQuestion(pending, userQuestionError(
@@ -2253,6 +2283,7 @@ export class TelegramBridge {
       && active.agent.status === 'running') {
       void this.safeAction(pending.chatId, 'typing')
       this.startTyping(active)
+      active.progress?.resume()
     }
     pending.resolve({ answers: pending.answers })
   }
@@ -2260,6 +2291,8 @@ export class TelegramBridge {
   private rejectPendingQuestion(pending: PendingTelegramQuestion, error: unknown): void {
     if (!this.settlePendingQuestion(pending)) return
     void this.clearQuestionKeyboard(pending)
+    const active = this.chats.get(String(pending.chatId))?.active
+    if (active?.agent === pending.agent) active.progress?.resume()
     pending.reject(error)
   }
 
@@ -2293,20 +2326,32 @@ export class TelegramBridge {
     if (chat === undefined) return
     switch (event.type) {
       case 'turn/start':
+        chat.progress?.dispose()
         void this.safeAction(chat.chatId, 'typing')
         void this.enqueue(chat, () => this.onTurnStart(chat))
+        if (this.client.sendMessageDraft !== undefined || this.client.sendRichMessageDraft !== undefined) {
+          chat.progress = new TelegramProgress(this.client, chat.chatId, this.abortController.signal,
+            task => this.enqueue(chat, task), id => chat.transientMessageIds.add(id),
+            error => this.ctx.logger.warn('[telegram] preview failed: %s', messageOf(error)), this.maxMessageLength)
+        }
         break
       case 'assistant/message': {
+        chat.progress?.pause()
         const text = assistantText(event)
         if (text !== undefined) {
-          void this.enqueue(chat, () => this.onAssistantText(chat, text))
+          const richHtml = chat.progress?.finalHtml(text)
+          void this.enqueue(chat, () => this.onAssistantText(chat, text, richHtml))
         }
         break
       }
-      case 'turn/end':
-        void this.enqueue(chat, () => this.onTurnEnd(chat, event))
+      case 'turn/end': {
+        const notice = chat.progress?.terminalNotice(event.data.reason?.kind ?? 'completed')
+        chat.progress?.dispose()
+        void this.enqueue(chat, () => this.onTurnEnd(chat, event, notice))
         break
+      }
       default:
+        chat.progress?.event(event)
         break
     }
   }
@@ -2326,11 +2371,23 @@ export class TelegramBridge {
   }
 
   /** Send each complete assistant step as a fresh message instead of editing prior output. */
-  private async onAssistantText(chat: ActiveChatSession, text: string): Promise<void> {
+  private async onAssistantText(chat: ActiveChatSession, text: string, richHtml?: string): Promise<void> {
     for (const messageId of chat.latestAssistantMessageIds) {
       chat.transientMessageIds.add(messageId)
     }
-    chat.latestAssistantMessageIds = await this.deliver(chat.chatId, text)
+    if (richHtml !== undefined && this.client.sendRichMessage !== undefined) {
+      try {
+        const sent = await this.client.sendRichMessage(chat.chatId, richHtml, this.abortController.signal)
+        chat.latestAssistantMessageIds = [sent.message_id]
+        return
+      } catch (error) {
+        // A transport failure may already have delivered the message. Only a
+        // definite unsupported/invalid-rich-content rejection can fall back.
+        if (!(error instanceof TelegramApiError) || (error.code !== 400 && error.code !== 404)) throw error
+      }
+    }
+    const delivered = await this.deliver(chat.chatId, text)
+    if (delivered.length > 0) chat.latestAssistantMessageIds = delivered
   }
 
   /**
@@ -2338,10 +2395,11 @@ export class TelegramBridge {
    * answer, so remove every prior output and interaction artifact. An aborted
    * turn has no final answer and removes the latest partial output too.
    */
-  private async onTurnEnd(chat: ActiveChatSession, event: Extract<SessionEvent, { type: 'turn/end' }>): Promise<void> {
+  private async onTurnEnd(chat: ActiveChatSession, event: Extract<SessionEvent, { type: 'turn/end' }>, notice?: string): Promise<void> {
     this.stopTyping(chat)
     const aborted = event.data.reason?.kind === 'aborted'
     await this.cleanupTurnMessages(chat, aborted)
+    if (notice !== undefined) await this.safeSend(chat.chatId, notice)
   }
 
   /** Add a bot or user interaction message to the current turn's cleanup set. */

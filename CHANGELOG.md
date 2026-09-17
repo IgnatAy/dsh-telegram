@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Stream DSH assistant events into native Telegram rich drafts, with thinking, tool preparation, tool execution, elapsed time, and a collapsed recent tool history in rich answers.
+- Coalesce preview updates, renew long-running drafts, and fall back to plain drafts or one edited progress message when the server rejects newer methods.
+- Connect native Stop controls to the current Agent; reject stale draft controls and stop preview updates during user questions, cancellation, session changes, and shutdown.
+- Preserve structured Telegram rate-limit errors, respect retry delays, and avoid automatically resending messages after ambiguous transport failures.
+- Thinking is shown as a status; raw reasoning, tool arguments, and tool result bodies are not forwarded. Full terminal streaming is not included.
+
 ## 0.2.2
 
 - Target DeepSeek Harness 0.1.5-rc.2 and update the locked development dependencies.
