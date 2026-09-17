@@ -41,7 +41,7 @@ These variables must be present on every launch; set them again in new terminals
 
 Send `/menu` in a private chat to open the control panel. It shows the current workspace, session, model, reasoning effort, task/question/collection state, and workspace/session totals. Buttons provide paginated catalogs, switching, session creation, and confirmed permanent deletion. Each action sends an updated panel and invalidates the previous keyboard; Refresh loads current state. Send `/help` for all commands.
 
-Removed commands: `/use`, `/model`, `/stop`, `/reasoning`, `/status`. Retained: `/start`, `/new`, `/clear`, `/collect`, `/send`, `/discard`, `/followup`, `/resend`, `/help`. New/clear are also available in the menu. Wait for a running task to finish or use native Stop before changing settings.
+Removed commands: `/use`, `/model`, `/stop`, `/reasoning`, `/status`. Retained: `/start`, `/new`, `/archive`, `/clear`, `/collect`, `/send`, `/discard`, `/followup`, `/resend`, `/help`. New/archive/clear are also available in the menu. Archiving preserves history and the selected workspace, releases the current chat selection, and marks the session as archived in the session list. Wait for a running task to finish or use native Stop before changing settings.
 
 ## Uninstall
 

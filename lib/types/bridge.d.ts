@@ -162,6 +162,8 @@ export declare class TelegramBridge {
     private bind;
     /** Forget the Telegram binding while leaving the global Agent lifecycle intact. */
     private releaseActive;
+    /** Persist the archive flag before releasing the Telegram selection. */
+    private archiveCurrent;
     /** Delete the current durable JSONL log and detach it from its workspace. */
     private clearCurrent;
     /**

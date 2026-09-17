@@ -41,7 +41,7 @@ npx @deepseek-ai/dsh web
 
 私聊 Bot，发送 `/menu` 打开控制面板。面板显示当前工作区、会话、模型、推理强度、运行状态、等待回答和收集状态，以及现有工作区与会话总数。点击按钮分页浏览全部工作区、会话与模型，切换选择、创建会话或确认永久删除当前会话。每次操作会发送更新后的面板，旧面板按钮自动失效；点击“刷新状态”获取最新状态。发送 `/help` 查看全部命令。
 
-已移除 `/use`、`/model`、`/stop`、`/reasoning`、`/status`。保留 `/start`、`/new`、`/clear`、`/collect`、`/send`、`/discard`、`/followup`、`/resend`、`/help`；`/new` 和 `/clear` 的功能也集成在菜单内。运行中请等待任务完成，或使用 Telegram 原生停止按钮后再切换设置。
+已移除 `/use`、`/model`、`/stop`、`/reasoning`、`/status`。保留 `/start`、`/new`、`/archive`、`/clear`、`/collect`、`/send`、`/discard`、`/followup`、`/resend`、`/help`；`/new`、`/archive` 和 `/clear` 的功能也集成在菜单内。归档会保留聊天记录和当前工作区、退出当前会话，并在会话列表中标记“已归档”。运行中请等待任务完成，或使用 Telegram 原生停止按钮后再切换设置。
 
 ## 卸载
 

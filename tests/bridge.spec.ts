@@ -63,7 +63,7 @@ interface Harness {
     sessionPersistence: { resolveCurrentLog: Mock; stat: Mock; open: Mock }
     sessionQuery: { listSessions: Mock; observeSession: Mock }
     sessionController: { selectModel: Mock }
-    workspaceRegistry: { list: Mock; resolveByPath: Mock; archivedSessionIds: string[] }
+    workspaceRegistry: { list: Mock; resolveByPath: Mock; archiveSession: Mock; archivedSessionIds: string[] }
     logger: { warn: Mock; error: Mock }
   }
   presetMount: Mock
@@ -435,6 +435,9 @@ function createHarness(
       })),
     },
     workspaceRegistry: {
+      archiveSession: vi.fn(async (id: string) => {
+        if (!ctx.workspaceRegistry.archivedSessionIds.includes(id)) ctx.workspaceRegistry.archivedSessionIds.push(id)
+      }),
       list: vi.fn(() => workspaces),
       resolveByPath: vi.fn(async (path: string) => workspaces.find(workspace => workspace.path === path)),
       archivedSessionIds: sessionSpecs.filter(session => session.archived).map(session => session.id),
@@ -893,6 +896,7 @@ describe('TelegramBridge', () => {
     expect(commands).toEqual(expect.arrayContaining([
       expect.objectContaining({ command: 'start' }),
       expect.objectContaining({ command: 'menu' }),
+      expect.objectContaining({ command: 'archive' }),
       expect.objectContaining({ command: 'collect' }),
       expect.objectContaining({ command: 'send' }),
       expect.objectContaining({ command: 'discard' }),
@@ -1027,6 +1031,42 @@ describe('TelegramBridge', () => {
     await selectSession(h, 1, 2)
     await waitFor(() => h.ctx.agents.resume.mock.calls.length === 1 ? true : undefined, 'healthy session selected')
     expect(h.ctx.agents.resume.mock.calls[0]?.[0]).toMatchObject({ resumeSessionId: 's-good' })
+  })
+
+  it.each(['command', 'menu'])('archives through %s without deleting records and retains the workspace', async (entry) => {
+    const h = createHarness({}, {
+      workspaces: [{ path: '/telegram', title: 'telegram', sessionIds: ['s-a'] }],
+      sessions: [{ id: 's-a', cwd: '/telegram', title: '保留记录' }],
+    })
+    h.bridge.start()
+    await waitFor(() => h.polls.length > 0 ? true : undefined, 'polling')
+    await selectSession(h, 1, 1)
+    if (entry === 'menu') await clickMenu(h, '归档会话')
+    else h.client.getUpdates.mockResolvedValueOnce([{ ...update({ text: '/archive' }), update_id: 20 }])
+    await waitFor(() => h.sent.some(message => message.text.includes('已归档会话')) ? true : undefined, 'archive reply')
+    expect(h.ctx.workspaceRegistry.archiveSession).toHaveBeenCalledWith('s-a')
+    expect(h.workspaces[0]!.detachSession).not.toHaveBeenCalled()
+    expect(h.workspaces[0]!.sessionIds).toEqual(['s-a'])
+    await openSessions(h)
+    expect(h.sent.at(-1)?.text).toContain('已归档')
+    h.client.getUpdates.mockResolvedValueOnce([{ ...update({ text: '/new' }), update_id: 21 }])
+    await waitFor(() => h.ctx.agents.create.mock.calls.length === 1 ? true : undefined, 'new session')
+    expect(h.ctx.agents.create.mock.calls[0]?.[0]).toMatchObject({ meta: { cwd: '/telegram' } })
+  })
+
+  it('keeps the selection when archive persistence fails', async () => {
+    const h = createHarness({}, {
+      workspaces: [{ path: '/telegram', title: 'telegram', sessionIds: ['s-a'] }],
+      sessions: [{ id: 's-a', cwd: '/telegram' }],
+    })
+    h.bridge.start()
+    await waitFor(() => h.polls.length > 0 ? true : undefined, 'polling')
+    await selectSession(h, 1, 1)
+    h.ctx.workspaceRegistry.archiveSession.mockRejectedValueOnce(new Error('disk failure'))
+    await clickMenu(h, '归档会话')
+    expect(h.sent.at(-1)?.text).toContain('disk failure')
+    h.client.getUpdates.mockResolvedValueOnce([{ ...update({ text: '继续' }), update_id: 22 }])
+    await waitFor(() => h.agents[0]?.agent.followup.mock.calls.length === 1 ? true : undefined, 'selection preserved')
   })
 
   it('menu confirmation detaches and deletes the current JSONL session while retaining its workspace', async () => {
