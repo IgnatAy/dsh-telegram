@@ -55,20 +55,18 @@ describe('TelegramClient', () => {
   it('sends native draft controls and persists rich content through the matching method', async () => {
     const fetchImpl = fetchMock(async () => jsonResponse({ ok: true, result: true }))
     const client = new TelegramClient('t:ok', { fetch: fetchImpl })
-    await client.sendMessageDraft(7, 11, '')
     await client.sendRichMessageDraft(7, 11, '<tg-thinking>搜索中</tg-thinking>')
     await client.sendRichMessage(7, '<p>完成</p>')
     const bodies = fetchImpl.mock.calls.map(call => JSON.parse(call[1]!.body as string))
-    expect(bodies[0]).toEqual({ chat_id: 7, draft_id: 11, text: '', can_stop: true })
-    expect(bodies[1]).toEqual({ chat_id: 7, draft_id: 11, rich_message: { html: '<tg-thinking>搜索中</tg-thinking>' }, can_stop: true })
-    expect(bodies[2]).toEqual({ chat_id: 7, rich_message: { html: '<p>完成</p>' } })
+    expect(bodies[0]).toEqual({ chat_id: 7, draft_id: 11, rich_message: { html: '<tg-thinking>搜索中</tg-thinking>' }, can_stop: true })
+    expect(bodies[1]).toEqual({ chat_id: 7, rich_message: { html: '<p>完成</p>' } })
   })
 
   it('returns structured draft flood control without blocking the latest-preview queue', async () => {
     const fetchImpl = fetchMock(async () => jsonResponse({ ok: false, error_code: 429,
       description: 't:ok rate limited', parameters: { retry_after: 3 } }, 429))
     const client = new TelegramClient('t:ok', { fetch: fetchImpl })
-    const error = await client.sendMessageDraft(7, 1, 'text').catch(error => error)
+    const error = await client.sendRichMessageDraft(7, 1, '<p>text</p>').catch(error => error)
     expect(error).toBeInstanceOf(TelegramApiError)
     expect(error).toMatchObject({ code: 429, retryAfter: 3 })
     expect(error.message).not.toContain('t:ok')
@@ -206,7 +204,7 @@ describe('TelegramClient', () => {
     await expect(client.editMessageText(7, 8, 'updated')).resolves.toEqual(edited)
 
     fetchImpl.mockImplementationOnce(async () => jsonResponse({ ok: true, result: true }))
-    await expect(client.deleteMessage(7, 8)).resolves.toBe(true)
+    await expect(client.deleteMessages(7, [8])).resolves.toBe(true)
   })
 
   it('updates keyboards and acknowledges callback queries', async () => {

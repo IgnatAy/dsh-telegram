@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Render native Rich HTML blocks in final replies and streaming previews: headings, tables, lists, quotations, and dividers. Remove blank-line padding around blocks; replace fixed-width fallback tables with field/value lists and update the injected mobile-formatting guidance.
+
+- Route Telegram native Stop and `/stop` through one current-task cancellation handler, including paused previews and pending user questions, without draft-ID gating.
+- Remove legacy preview adapters, per-message cleanup fallback, historical session membership repair, legacy installer-marker migration, and WSL setup/run wrappers. Use `pnpm build` and `bash install.sh` for local updates.
+
+- Include output-format constraints in the existing Telegram channel system context, so Telegram sessions receive them automatically without editing AGENTS.md.
+
 - Bound Telegram API requests, including response-body reads, so a stalled request cannot permanently block subsequent replies. Draft requests time out after 5 seconds; other calls after 15 seconds, with additional time for long polling. Long rate-limit delays are reported instead of silently holding the delivery queue.
 - Add consecutive-turn and stalled-response regressions for reply delivery.
 - Stream DSH assistant events into native Telegram rich drafts, with thinking, tool preparation, tool execution, elapsed time, and a collapsed recent tool history in rich answers.

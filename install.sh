@@ -29,5 +29,10 @@ fi
 if [ "$ACTION" = uninstall ]; then
   bash "$ROOT/scripts/install-copy.sh" uninstall "$PROFILE"
 else
-  DSH_TELEGRAM_PROFILE="$PROFILE" bash "$ROOT/setup-wsl.sh"
+  if ! command -v node >/dev/null 2>&1; then
+    echo 'install: Node.js 22.19+ or 24+ is required' >&2
+    exit 1
+  fi
+  node -e 'const [major, minor] = process.versions.node.split(".").map(Number); if (!(major === 22 && minor >= 19 || major >= 24)) { console.error("install: Node.js 22.19+ or 24+ is required"); process.exit(1) }'
+  bash "$ROOT/scripts/install-copy.sh" "$PROFILE"
 fi

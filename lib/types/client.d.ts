@@ -94,10 +94,9 @@ export interface TelegramUpdate {
 }
 /** Runtime seam surface tests substitute with a fake. */
 export interface TelegramClientLike {
-    /** Optional for older adapters; native private-chat previews expire after 30 seconds. */
-    sendMessageDraft?(chatId: number, draftId: number, text: string, signal?: AbortSignal): Promise<boolean>;
-    sendRichMessageDraft?(chatId: number, draftId: number, html: string, signal?: AbortSignal): Promise<boolean>;
-    sendRichMessage?(chatId: number, html: string, signal?: AbortSignal): Promise<TelegramMessage>;
+    /** Native private-chat previews expire after 30 seconds. */
+    sendRichMessageDraft(chatId: number, draftId: number, html: string, signal?: AbortSignal): Promise<boolean>;
+    sendRichMessage(chatId: number, html: string, signal?: AbortSignal): Promise<TelegramMessage>;
     /** Fetch the bot identity; validates the token. */
     getMe(signal?: AbortSignal): Promise<TelegramUser>;
     /** Long-poll for updates at or after `offset`. */
@@ -117,8 +116,6 @@ export interface TelegramClientLike {
     editMessageReplyMarkup(chatId: number, messageId: number, replyMarkup?: TelegramInlineKeyboardMarkup, signal?: AbortSignal): Promise<TelegramMessage>;
     /** Acknowledge a callback so Telegram dismisses the button progress spinner. */
     answerCallbackQuery(callbackQueryId: string, text?: string, showAlert?: boolean, signal?: AbortSignal): Promise<boolean>;
-    /** Delete a previously sent message. */
-    deleteMessage(chatId: number, messageId: number, signal?: AbortSignal): Promise<boolean>;
     /** Delete up to 100 messages from one chat in a single request. */
     deleteMessages(chatId: number, messageIds: readonly number[], signal?: AbortSignal): Promise<boolean>;
     /** Resolve and download one Telegram-hosted file under an explicit byte cap. */
@@ -192,7 +189,6 @@ export declare class TelegramClient implements TelegramClientLike {
      * @returns whether the action was accepted.
      */
     sendChatAction(chatId: number, action: string, signal?: AbortSignal): Promise<boolean>;
-    sendMessageDraft(chatId: number, draftId: number, text: string, signal?: AbortSignal): Promise<boolean>;
     sendRichMessageDraft(chatId: number, draftId: number, html: string, signal?: AbortSignal): Promise<boolean>;
     sendRichMessage(chatId: number, html: string, signal?: AbortSignal): Promise<TelegramMessage>;
     /**
@@ -207,7 +203,6 @@ export declare class TelegramClient implements TelegramClientLike {
     editMessageText(chatId: number, messageId: number, text: string, parseMode?: 'HTML', signal?: AbortSignal): Promise<TelegramMessage>;
     editMessageReplyMarkup(chatId: number, messageId: number, replyMarkup?: TelegramInlineKeyboardMarkup, signal?: AbortSignal): Promise<TelegramMessage>;
     answerCallbackQuery(callbackQueryId: string, text?: string, showAlert?: boolean, signal?: AbortSignal): Promise<boolean>;
-    deleteMessage(chatId: number, messageId: number, signal?: AbortSignal): Promise<boolean>;
     deleteMessages(chatId: number, messageIds: readonly number[], signal?: AbortSignal): Promise<boolean>;
     /**
      * Resolve a Telegram `file_id` and download it without ever buffering more

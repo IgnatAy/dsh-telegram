@@ -68,4 +68,10 @@ Only plugin files and installer-managed configuration are removed. DSH, model se
 
 Only private chats are supported; users outside the allowlist are denied. Keep tokens out of Git. Explicit targets are supported: `bash install.sh install web` / `bash install.sh uninstall web`.
 
-After source changes, run `pnpm install --frozen-lockfile`, then `bash setup-wsl.sh --rebuild` and restart DSH. The older setup and run scripts remain compatible; `run-wsl.sh` now launches through npx.
+After source changes, run `pnpm install --frozen-lockfile`, `pnpm build`, and `bash install.sh`, then restart DSH.
+
+Previews use native Telegram rich drafts and require a Bot API service supporting that interface. Native Stop and `/stop` share the same cancellation path, including pending questions. Stop targets the current task regardless of draft ID, including events from earlier drafts.
+
+Legacy setup/run scripts, installer-marker migration, automatic workspace adoption of historical sessions, and plain-draft/edit-message preview adapters have been removed. Registered workspace sessions remain available; historical files are neither migrated nor deleted. Legacy manually installed configuration must be maintained manually; current managed blocks still support repeated installation and removal.
+
+Replies and streaming previews render native rich headings, tables, lists, quotations, and dividers with Telegram-managed paragraph spacing. Plain-message fallback turns tables into field/value lists instead of fixed-width grids. Replies above the existing 24,000-character threshold still use split ordinary messages. The injected channel prompt recommends short, 2–3-column tables for phones.

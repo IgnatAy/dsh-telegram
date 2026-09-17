@@ -31,7 +31,7 @@ export DSH_TELEGRAM_TOKEN='<BotFather 提供的 Bot token>'
 export DSH_TELEGRAM_ALLOWED_USER_IDS='<你的 Telegram 数字用户 ID>'
 ```
 
-之后照常启动，Telegram Bot 与 Web UI 在同一个进程内运行，无需 `run-wsl.sh` 或额外 `--patch`：
+之后照常启动，Telegram Bot 与 Web UI 在同一个进程内运行，无需额外启动脚本或 `--patch`：
 
 ```bash
 npx @deepseek-ai/dsh web
@@ -68,4 +68,10 @@ curl -fsSL https://raw.githubusercontent.com/IgnatAy/dsh-telegram/main/install.s
 
 仅支持私聊，白名单外的用户无法访问。请勿将 token 提交到 Git。也可显式指定目标：`bash install.sh install web` / `bash install.sh uninstall web`。
 
-修改源码后执行 `pnpm install --frozen-lockfile`，再执行 `bash setup-wsl.sh --rebuild` 并重启 dsh。旧的 `setup-wsl.sh` 和 `run-wsl.sh` 保留兼容，后者现在通过 npx 启动。
+修改源码后依次执行 `pnpm install --frozen-lockfile`、`pnpm build`、`bash install.sh`，然后重启 dsh。
+
+预览使用 Telegram 原生富文本草稿接口，需要支持该接口的 Bot API 服务。点击原生停止按钮与发送 `/stop` 相同：取消当前任务和等待中的提问，并停止预览。按钮不按草稿编号筛选，较早草稿的停止事件也会作用于当前任务。
+
+已移除旧版安装脚本、旧安装标记自动迁移、旧会话自动归入工作区，以及普通草稿/编辑消息预览兼容层。现有工作区中已登记的会话照常使用，历史文件不会被迁移或删除。旧版手动安装配置需自行整理；当前安装器管理的配置仍支持重复安装和卸载。
+
+回复和生成中的预览使用原生富消息标题、表格、列表、引用与分隔线；段落间距由 Telegram 排版。普通消息回退时，表格转换为逐行“字段：值”，避免手机上的字符网格错位。超过现有 24,000 字符阈值的回复继续走普通消息分段。插件自动注入手机排版提示词，建议表格使用 2–3 列短内容。

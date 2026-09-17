@@ -28,6 +28,8 @@ async function waitFor<T>(get: () => T | undefined, description: string): Promis
 function fakeClient(): TelegramClientLike & { polls: number } {
   const client = {
     polls: 0,
+    async sendRichMessageDraft() { return true },
+    async sendRichMessage() { return { message_id: 1, chat: { id: 7, type: 'private' }, date: 0 } },
     async getMe() {
       return { id: 1, is_bot: true }
     },
@@ -51,9 +53,6 @@ function fakeClient(): TelegramClientLike & { polls: number } {
       return { message_id: messageId, chat: { id: chatId, type: 'private' }, date: 0 }
     },
     async answerCallbackQuery() {
-      return true
-    },
-    async deleteMessage() {
       return true
     },
     async deleteMessages() {

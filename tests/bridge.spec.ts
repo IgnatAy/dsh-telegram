@@ -48,7 +48,6 @@ interface Harness {
     editMessageText: Mock
     editMessageReplyMarkup: Mock
     answerCallbackQuery: Mock
-    deleteMessage: Mock
     deleteMessages: Mock
     downloadFile: Mock
   }
@@ -212,10 +211,12 @@ function createHarness(
     editMessageText: Mock
     editMessageReplyMarkup: Mock
     answerCallbackQuery: Mock
-    deleteMessage: Mock
     deleteMessages: Mock
     downloadFile: Mock
   } = {
+    sendRichMessageDraft: vi.fn(async () => true),
+    // Exercise split HTML delivery by default; rich delivery is covered separately.
+    sendRichMessage: vi.fn(async () => { throw new TelegramApiError('invalid rich content', 400) }),
     getMe: vi.fn(async () => ({ id: 1, is_bot: true })),
     getUpdates: vi.fn(async (offset?: number) => { polls.push(offset); return [] as TelegramUpdate[] }),
     sendMessage: vi.fn(async (
@@ -252,7 +253,6 @@ function createHarness(
       date: 0,
     })),
     answerCallbackQuery: vi.fn(async () => true),
-    deleteMessage: vi.fn(async () => true),
     deleteMessages: vi.fn(async () => true),
     downloadFile: vi.fn(async (fileId: string): Promise<TelegramDownloadedFile> => ({
       file: { file_id: fileId, file_unique_id: `unique-${fileId}`, file_path: `photos/${fileId}` },
@@ -604,7 +604,7 @@ describe('TelegramBridge', () => {
   it('clears a failed draft with a terminal notice even when no text was produced', async () => {
     const h = createHarness()
     const draft = vi.fn(async () => true)
-    h.client.sendMessageDraft = draft
+    h.client.sendRichMessageDraft = draft
     h.bridge.start()
     const handle = await selectNew(h)
     h.emit(handle.agent.session.id, { type: 'turn/start', data: { turn: 1 } } as SessionEvent)
@@ -643,10 +643,10 @@ describe('TelegramBridge', () => {
     expect(handle.agent.handlers.get('agent/assistant-stream')).toHaveLength(0)
   })
 
-  it('only accepts a native stop for the current private draft and rejects stale stops', async () => {
-    const h = createHarness({ allowedUserIds: [7, 42] })
+  it('treats native stop as /stop regardless of draft ID and rejects other chats or topics', async () => {
+    const h = createHarness({ allowAllUsers: false, allowedUserIds: [7, 42] })
     const draft = vi.fn(async () => true)
-    h.client.sendMessageDraft = draft
+    h.client.sendRichMessageDraft = draft
     h.bridge.start()
     const handle = await selectNew(h)
     handle.agent.status = 'running'
@@ -659,18 +659,31 @@ describe('TelegramBridge', () => {
     await waitFor(() => draft.mock.calls.length === 2 ? true : undefined, 'new draft')
     const draftId = draft.mock.calls[1]?.[1]
     h.client.getUpdates.mockResolvedValueOnce([
-      { update_id: 2, stopped_message_generation: { chat: { id: 7, type: 'private' }, draft_id: oldId } },
+      { update_id: 2, stopped_message_generation: { chat: { id: 99, type: 'private' }, draft_id: oldId } },
       { update_id: 3, stopped_message_generation: { chat: { id: 7, type: 'group' }, draft_id: draftId } },
       { update_id: 4, stopped_message_generation: { chat: { id: 7, type: 'private' }, draft_id: draftId, message_thread_id: 2 } },
     ])
     await waitFor(() => h.polls.includes(5) ? true : undefined, 'invalid stops processed')
     expect(handle.agent.cancel).not.toHaveBeenCalled()
     h.client.getUpdates.mockResolvedValueOnce([
-      { update_id: 5, stopped_message_generation: { chat: { id: 7, type: 'private' }, draft_id: draftId } },
+      { update_id: 5, stopped_message_generation: { chat: { id: 7, type: 'private' }, draft_id: oldId } },
     ])
     await waitFor(() => handle.agent.cancel.mock.calls.length ? true : undefined, 'native cancellation')
     expect(handle.agent.cancel).toHaveBeenCalledWith({ kind: 'user' })
     await waitFor(() => h.sent.some(message => message.text.includes('已中断')) ? true : undefined, 'stop acknowledgement')
+  })
+
+  it.each([true, false])('native stop without a preview honors private-chat authorization: %s', async (authorized) => {
+    const h = createHarness({ allowAllUsers: false, allowedUserIds: authorized ? [7, 42] : [42] })
+    h.bridge.start()
+    const handle = await selectNew(h)
+    handle.agent.status = 'running'
+    h.client.getUpdates.mockResolvedValueOnce([
+      { update_id: 20, stopped_message_generation: { chat: { id: 7, type: 'private' }, draft_id: 1 } },
+    ])
+    await waitFor(() => h.polls.includes(21) ? true : undefined, 'stop processed')
+    expect(handle.agent.cancel).toHaveBeenCalledTimes(authorized ? 1 : 0)
+    if (authorized) expect(handle.agent.cancel).toHaveBeenCalledWith({ kind: 'user' })
   })
 
   it('start registers the session listener and begins polling', async () => {
@@ -825,7 +838,7 @@ describe('TelegramBridge', () => {
     expect(h.workspaces[0]!.sessionIds.map(String)).toContain(active.agent.session.id)
   })
 
-  it('/use repairs historical Telegram sessions that have a matching workspace cwd', async () => {
+  it('/use does not migrate unregistered historical Telegram sessions', async () => {
     const h = createHarness({}, {
       workspaces: [{ path: '/telegram', title: 'telegram' }],
       sessions: [{ id: 'telegram:7:legacy', cwd: '/telegram', title: '旧会话' }],
@@ -834,11 +847,12 @@ describe('TelegramBridge', () => {
     await waitFor(() => h.polls.length > 0 ? true : undefined, 'polling')
     h.client.getUpdates.mockResolvedValueOnce([update({ text: '/use' })])
     const reply = await waitFor(() => h.sent[0], 'catalog reply')
-    expect(h.workspaces[0]!.attachSession).toHaveBeenCalledWith(SessionId('telegram:7:legacy'))
-    expect(reply.text).toContain('<b>1.1</b>　旧会话')
+    expect(h.workspaces[0]!.attachSession).not.toHaveBeenCalled()
+    expect(h.ctx.sessionQuery.listSessions).not.toHaveBeenCalled()
+    expect(reply.text).not.toContain('旧会话')
   })
 
-  it('/use reads registered sessions even when the global history scan fails', async () => {
+  it('/use reads registered sessions without scanning global history', async () => {
     const h = createHarness({}, {
       workspaces: [{ path: '/telegram', title: 'telegram', sessionIds: ['s-good'] }],
       sessions: [{ id: 's-good', cwd: '/telegram', title: '可读取的会话' }],
@@ -1261,6 +1275,26 @@ describe('TelegramBridge', () => {
     expect(deleted).not.toContain(finalMessage.messageId)
   })
 
+  it.each(['command', 'native'] as const)('%s stop cancels a pending question while the preview is paused', async (source) => {
+    const h = createHarness()
+    h.bridge.start()
+    const handle = await selectNew(h)
+    handle.agent.status = 'running'
+    h.emit(handle.agent.session.id, { type: 'turn/start', data: { turn: 1 } } as SessionEvent)
+    const ask = await installQuestionHandler(h, handle)
+    const answer = ask({
+      questions: [{ id: 'confirm', question: '继续？', options: [{ label: '是' }, { label: '否' }] }],
+      signal: new AbortController().signal,
+    }, async () => ({ answers: [] })).catch((error: unknown) => error)
+    await waitFor(() => h.sent.some(message => message.text.includes('继续？')) ? true : undefined, 'question')
+    h.client.getUpdates.mockResolvedValueOnce([source === 'command'
+      ? { ...update({ text: '/stop' }), update_id: 20 }
+      : { update_id: 20, stopped_message_generation: { chat: { id: 7, type: 'private' }, draft_id: 1 } }])
+    expect(await answer).toMatchObject({ code: 'ASK_ABORTED' })
+    expect(handle.agent.cancel).toHaveBeenCalledWith({ kind: 'user' })
+    await waitFor(() => h.sent.some(message => message.text.includes('已中断')) ? true : undefined, 'stop acknowledgement')
+  })
+
   it('rejects a pending DSH question with ASK_ABORTED when its request signal aborts', async () => {
     const h = createHarness()
     h.bridge.start()
@@ -1347,6 +1381,12 @@ describe('TelegramBridge', () => {
       name: 'telegram:channel',
       text: expect.stringContaining('Telegram bot'),
     }))
+    const channelPrompt = boundAgentCtx.systemPrompt.context.mock.calls[0]?.[0].text as string
+    expect(channelPrompt).toContain('仅适用于当前 Telegram 通道的回复')
+    expect(channelPrompt).toContain('不要预先按 Telegram MarkdownV2 转义')
+    expect(channelPrompt).toContain('不使用 `[名称][ref]`')
+    expect(channelPrompt).toContain('不使用 `<details>`')
+    expect(channelPrompt).toContain('不限制用户要求生成的文件内容')
 
     const assemble = handlers.get('system-prompt/assemble')
     const request = handlers.get('agent/request')
@@ -1879,6 +1919,8 @@ describe('TelegramBridge', () => {
 
   it('runs the production default sleep cadence with a client seam', async () => {
     const client = {
+      sendRichMessageDraft: vi.fn(async () => true),
+      sendRichMessage: vi.fn(async () => ({ message_id: 1, chat: { id: 7, type: 'private' }, date: 0 })),
       getMe: vi.fn(async () => ({ id: 1, is_bot: true })),
       getUpdates: vi.fn(async () => [] as TelegramUpdate[]),
       sendMessage: vi.fn(async () => ({ message_id: 1, chat: { id: 7, type: 'private' }, date: 0 })),
@@ -1895,7 +1937,6 @@ describe('TelegramBridge', () => {
         date: 0,
       })),
       answerCallbackQuery: vi.fn(async () => true),
-      deleteMessage: vi.fn(async () => true),
       deleteMessages: vi.fn(async () => true),
       downloadFile: vi.fn(async (): Promise<TelegramDownloadedFile> => ({
         file: { file_id: 'f', file_unique_id: 'u', file_path: 'photos/f' },

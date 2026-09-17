@@ -45,14 +45,14 @@ describe('profile copy installer', () => {
     ], { encoding: 'utf8' }).trim()).toBe('function')
   })
 
-  it('replaces legacy installer rows and leaves unrelated web settings on uninstall', () => {
+  it('replaces managed installer rows and leaves unrelated web settings on uninstall', () => {
     const { home, run } = fixture()
     const profile = join(home, 'profiles/web')
     mkdirSync(profile, { recursive: true })
     writeFileSync(join(profile, 'package.json'), '{"private":true}')
     const patch = join(profile, 'cordis.patch.yml')
     const custom = '- id: tools\n  config:\n    mode: native\n'
-    writeFileSync(patch, custom + '# telegram plugin (local copy; managed by scripts/install-copy.sh)\n- insert:\n    - id: telegram\n      name: dsh-telegram\n')
+    writeFileSync(patch, custom + '# telegram plugin begin (managed by scripts/install-copy.sh)\n- insert:\n    - id: telegram\n      name: dsh-telegram\n# telegram plugin end (managed by scripts/install-copy.sh)\n')
     run('web')
     run('web')
     expect(readFileSync(patch, 'utf8').match(/    - id: telegram\n/g)).toHaveLength(1)
@@ -111,28 +111,11 @@ describe('one-command entry point', () => {
     expect(readFileSync(history, 'utf8')).toBe('keep history')
   })
 
-  it('launches npx from the caller directory without a repository patch', () => {
-    const { home, env, run } = fixture()
-    run('web')
-    const bin = join(home, 'bin')
-    mkdirSync(bin)
-    writeFileSync(join(bin, 'npx'), '#!/bin/sh\npwd\nprintf "%s\\n" "$@"\n')
-    chmodSync(join(bin, 'npx'), 0o755)
-    const output = execFileSync('bash', [fileURLToPath(new URL('../run-wsl.sh', import.meta.url))], {
-      cwd: home, encoding: 'utf8', env: {
-        ...env, PATH: `${bin}:${process.env.PATH}`, DSH_TELEGRAM_TOKEN: 'test',
-        DSH_TELEGRAM_ALLOWED_USER_IDS: '123',
-      },
-    })
-    expect(output).toContain(home + '\n@deepseek-ai/dsh\n--profile\nweb\n')
-    expect(output).not.toContain('--patch')
-  })
-
   it('installs and uninstalls through stdin using a downloaded snapshot', () => {
     const { home, env } = fixture()
     const root = fileURLToPath(new URL('../', import.meta.url))
     const archive = join(home, 'snapshot.tar.gz')
-    execFileSync('tar', ['-czf', archive, '-C', root, './install.sh', './setup-wsl.sh', './scripts', './lib', './package.json', './cordis.patch.yml'])
+    execFileSync('tar', ['-czf', archive, '-C', root, './install.sh', './scripts', './lib', './package.json', './cordis.patch.yml'])
     const bin = join(home, 'bin')
     mkdirSync(bin)
     // Stand in for curl only; exercise real extraction and installer execution.

@@ -13,17 +13,15 @@ function setup() {
   vi.setSystemTime(100000)
   const client = {
     sendRichMessageDraft: vi.fn(async () => true),
-    sendMessageDraft: vi.fn(async () => true),
     sendRichMessage: vi.fn(),
     sendMessage: vi.fn(async () => ({ message_id: 42 })),
     editMessageText: vi.fn(async () => ({ message_id: 42 })),
   }
   let queue = Promise.resolve()
-  const track = vi.fn()
   const warn = vi.fn()
   progress = new TelegramProgress(client as unknown as TelegramClientLike, 7, new AbortController().signal,
-    task => { queue = queue.then(task); return queue }, track, warn)
-  return { client, track, warn, drain: () => queue, p: progress }
+    task => { queue = queue.then(task); return queue }, warn)
+  return { client, warn, drain: () => queue, p: progress }
 }
 
 function start(p: TelegramProgress, attemptId = 'a', revision = 1) {
@@ -36,21 +34,6 @@ function chunk(p: TelegramProgress, text: string, revision: number, attemptId = 
 }
 
 describe('TelegramProgress', () => {
-  it('does not resend an ordinary fallback preview after an ambiguous send failure', async () => {
-    const { p, client, drain } = setup()
-    client.sendRichMessageDraft.mockRejectedValueOnce(new TelegramApiError('unsupported', 404))
-    client.sendMessageDraft.mockRejectedValueOnce(new TelegramApiError('unsupported', 404))
-    client.sendMessage.mockRejectedValueOnce(new Error('connection lost after sending'))
-    await drain()
-    await vi.advanceTimersByTimeAsync(2400)
-    start(p)
-    chunk(p, 'new text', 2)
-    await vi.advanceTimersByTimeAsync(30000)
-    expect(client.sendMessage).toHaveBeenCalledTimes(1)
-    expect(vi.getTimerCount()).toBe(0)
-    expect(p.finalHtml('final')).toBeUndefined()
-  })
-
   it('aborts an in-flight draft on disposal so final delivery can proceed', async () => {
     const { p, client, drain } = setup()
     client.sendRichMessageDraft.mockImplementationOnce((...args: unknown[]) => new Promise((_resolve, reject) => {
@@ -67,9 +50,23 @@ describe('TelegramProgress', () => {
   it('keeps code fences outside paragraph wrappers when persisting rich answers', () => {
     const { p } = setup()
     const html = p.finalHtml('Before\n\n```ts\nconst a = 1\n```\n\nAfter')
-    expect(html).toContain('<pre>const a = 1')
+    expect(html).toContain('<pre><code class="language-ts">const a = 1')
     expect(html).not.toContain('<p><pre>')
     expect(html).toContain('After')
+  })
+
+  it('uses native formatting for both streamed previews and persisted replies', async () => {
+    const { p, client, drain } = setup()
+    const text = '# 标题\n\n| 项目 | 说明 |\n|---|---|\n| 粗体 | **正常** |\n\n---'
+    start(p)
+    chunk(p, text, 2)
+    await drain()
+    const final = p.finalHtml(text)
+    expect(final).toContain('<table>')
+    expect(final).toContain('<h1>标题</h1>')
+    expect(final).toContain('<hr/>')
+    expect(client.sendRichMessageDraft.mock.calls.at(-1)?.[2]).toContain(final)
+    expect(final).not.toContain('<pre>')
   })
 
   it('keeps the other tool running when parallel results arrive out of order', async () => {
@@ -134,21 +131,17 @@ describe('TelegramProgress', () => {
     expect(final).not.toContain('secret')
   })
 
-  it('falls back from rich to plain drafts to editing one tracked message', async () => {
-    const { p, client, drain, track } = setup()
-    client.sendRichMessageDraft.mockRejectedValueOnce(new TelegramApiError('unsupported', 404))
-    client.sendMessageDraft.mockRejectedValueOnce(new TelegramApiError('unsupported', 400))
+  it('reports a rejected native preview without creating legacy preview messages', async () => {
+    const { p, client, drain, warn } = setup()
+    const error = new TelegramApiError('invalid rich content', 400)
+    client.sendRichMessageDraft.mockRejectedValueOnce(error)
     await drain()
-    await vi.advanceTimersByTimeAsync(1200)
-    await vi.advanceTimersByTimeAsync(1200)
-    expect(client.sendMessage).toHaveBeenCalledTimes(1)
-    expect(track).toHaveBeenCalledWith(42)
-    start(p)
-    chunk(p, '新增', 2)
-    await vi.advanceTimersByTimeAsync(1200)
-    expect(client.editMessageText).toHaveBeenCalledTimes(1)
-    expect(client.sendMessage).toHaveBeenCalledTimes(1)
-    expect(p.acceptsStop(p.draftId)).toBe(false)
+    expect(warn).toHaveBeenCalledWith(error)
+    await vi.advanceTimersByTimeAsync(6000)
+    expect(client.sendRichMessageDraft).toHaveBeenCalledTimes(2)
+    expect(client.sendMessage).not.toHaveBeenCalled()
+    expect(client.editMessageText).not.toHaveBeenCalled()
+    expect(p.finalHtml('完整答案')).toContain('完整答案')
   })
 
   it('honors retry_after while continuing to coalesce and keeps native mode', async () => {
@@ -162,7 +155,6 @@ describe('TelegramProgress', () => {
     await vi.advanceTimersByTimeAsync(1200)
     expect(client.sendRichMessageDraft).toHaveBeenCalledTimes(2)
     expect(client.sendRichMessageDraft.mock.calls.at(-1)?.[2]).toContain('最新')
-    expect(client.sendMessageDraft).not.toHaveBeenCalled()
   })
 
   it('does not downgrade on ambiguous network errors', async () => {
@@ -184,12 +176,10 @@ describe('TelegramProgress', () => {
     expect(client.sendRichMessageDraft).not.toHaveBeenCalled()
     p.resume()
     await drain()
-    expect(p.acceptsStop(p.draftId)).toBe(true)
     p.dispose()
     chunk(p, '迟到', 3)
     await vi.advanceTimersByTimeAsync(24000)
     expect(client.sendRichMessageDraft).toHaveBeenCalledTimes(1)
-    expect(p.acceptsStop(p.draftId)).toBe(false)
     expect(vi.getTimerCount()).toBe(0)
   })
 

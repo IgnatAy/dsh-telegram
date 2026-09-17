@@ -3,7 +3,7 @@ import type { AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { TelegramApiError } from './client.js'
 import type { TelegramClientLike } from './client.js'
-import { escapeHtml, markdownToHtml } from './format.js'
+import { escapeHtml, markdownToRichHtml } from './format.js'
 
 interface ToolProgress {
   id: string
@@ -47,20 +47,15 @@ export class TelegramProgress {
   private dirty = true
   private nextSend = 0
   private lastSent = 0
-  private fallbackMessage: number | undefined
-  private mode: 'rich' | 'draft' | 'edit'
 
   constructor(
     private readonly client: TelegramClientLike,
     private readonly chatId: number,
     signal: AbortSignal,
     private readonly enqueue: (task: () => Promise<void>) => Promise<void>,
-    private readonly track: (messageId: number) => void,
     private readonly warn: (error: unknown) => void,
-    private readonly maxLength = 4096,
   ) {
     this.signal = AbortSignal.any([signal, this.abort.signal])
-    this.mode = client.sendRichMessageDraft === undefined ? 'draft' : 'rich'
     this.timer = setInterval(() => this.schedule(), 1200)
     this.schedule()
   }
@@ -165,16 +160,10 @@ export class TelegramProgress {
     return 'ℹ️ **任务已结束**'
   }
 
-  /** Native stops must match this live draft, not a previous turn or another topic. */
-  acceptsStop(draftId: number): boolean {
-    return !this.disposed && !this.paused && this.mode !== 'edit' && draftId === this.draftId
-  }
-
   /** Rich final content keeps recent tool outcomes in a collapsed section. */
   finalHtml(text: string): string | undefined {
-    if (this.mode !== 'rich' || this.client.sendRichMessage === undefined || text.length > 24000) return undefined
-    const body = markdownToHtml(text).split(/(<pre>[\s\S]*?<\/pre>)/g)
-      .filter(Boolean).map(part => part.startsWith('<pre>') ? part : `<p>${part.replace(/\n/g, '<br>')}</p>`).join('')
+    if (text.length > 24000) return undefined
+    const body = markdownToRichHtml(text)
     return `${body}${this.details()}`
   }
 
@@ -213,9 +202,6 @@ export class TelegramProgress {
         if (error instanceof TelegramApiError && error.code === 429) {
           const delay = Number.isFinite(error.retryAfter) ? Math.max(1, error.retryAfter!) : 5
           this.nextSend = Date.now() + delay * 1000
-        } else if (error instanceof TelegramApiError && (error.code === 400 || error.code === 404) && this.mode !== 'edit') {
-          this.mode = this.mode === 'rich' && this.client.sendMessageDraft !== undefined ? 'draft' : 'edit'
-          this.nextSend = Date.now() + 1200
         } else if (/not modified/i.test(String(error))) {
           this.nextSend = Date.now() + 1200
         } else {
@@ -230,38 +216,7 @@ export class TelegramProgress {
 
   private async send(): Promise<void> {
     const status = this.status()
-    if (this.mode === 'rich' && this.client.sendRichMessageDraft !== undefined) {
-      await this.client.sendRichMessageDraft(this.chatId, this.draftId,
-        `<tg-thinking>${escapeHtml(status)}</tg-thinking>${this.details()}${this.text ? `<p>${escapeHtml(this.text).replace(/\n/g, '<br>')}</p>` : ''}`, this.signal)
-      return
-    }
-    const text = clip(`${status}\n${this.toolLines().join('\n')}${this.text ? `\n\n${this.text}` : ''}`, this.maxLength)
-    if (this.mode === 'draft' && this.client.sendMessageDraft !== undefined) {
-      await this.client.sendMessageDraft(this.chatId, this.draftId, text, this.signal)
-    } else {
-      this.mode = 'edit'
-      if (this.fallbackMessage === undefined) {
-        try {
-          const sent = await this.client.sendMessage(this.chatId, text, undefined, this.signal)
-          this.fallbackMessage = sent.message_id
-          this.track(sent.message_id)
-        } catch (error) {
-          // Without a message id, retrying an ambiguous send could create an
-          // unbounded trail of duplicate previews. Keep final delivery available.
-          if (!(error instanceof TelegramApiError) || error.code >= 500) {
-            if (!this.signal.aborted) this.warn(error)
-            this.dispose()
-          }
-          throw error
-        }
-      } else {
-        try {
-          await this.client.editMessageText(this.chatId, this.fallbackMessage, text, undefined, this.signal)
-        } catch (error) {
-          if (/message to edit not found|message can't be edited/i.test(String(error))) this.fallbackMessage = undefined
-          throw error
-        }
-      }
-    }
+    await this.client.sendRichMessageDraft(this.chatId, this.draftId,
+      `<tg-thinking>${escapeHtml(status)}</tg-thinking>${this.details()}${this.text ? markdownToRichHtml(this.text) : ''}`, this.signal)
   }
 }

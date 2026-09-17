@@ -89,6 +89,8 @@ export declare class TelegramBridge {
     private pollLoop;
     /** Wait for the poll cadence/backoff, but release immediately during teardown. */
     private wait;
+    /** Shared cancellation for /stop and Telegram's native Stop button. */
+    private stopCurrentTask;
     private handleUpdate;
     private authorizedUser;
     private handleCommand;
@@ -142,8 +144,6 @@ export declare class TelegramBridge {
     private formatReasoningChoices;
     /** Build the current numbered workspace/session catalog. */
     private loadCatalog;
-    /** Attach only historical Telegram sessions that predate workspace integration. */
-    private repairTelegramMembership;
     /** Render one stable numbered catalog for `/use`. */
     private formatCatalog;
     /** Resolve one numbered selection and bind the Telegram chat to it. */
@@ -218,7 +218,7 @@ export declare class TelegramBridge {
     private trackTransientMessage;
     /** Delete turn artifacts, optionally including the latest partial/final assistant step. */
     private cleanupTurnMessages;
-    /** Delete in Bot API batches, falling back to single-message deletion for compatibility. */
+    /** Delete turn artifacts in Bot API batches. */
     private deleteMessageIds;
     /** Keep Telegram's typing indicator alive while a turn runs (the action expires after ~5s). */
     private startTyping;

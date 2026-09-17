@@ -30,17 +30,14 @@ case "$DSH_HOME" in
 esac
 MARKER_BEGIN='# telegram plugin begin (managed by scripts/install-copy.sh)'
 MARKER_END='# telegram plugin end (managed by scripts/install-copy.sh)'
-LEGACY_MARKER='# telegram plugin (local copy; managed by scripts/install-copy.sh)'
 
 strip_managed_patch() {
   local input="$1"
   local output="$2"
-  awk -v begin="$MARKER_BEGIN" -v end="$MARKER_END" -v legacy="$LEGACY_MARKER" '
+  awk -v begin="$MARKER_BEGIN" -v end="$MARKER_END" '
     $0 == begin { managed = 1; next }
     managed && $0 == end { managed = 0; next }
     managed { next }
-    $0 == legacy { legacy_rows = 3; next }
-    legacy_rows > 0 { legacy_rows -= 1; next }
     { print }
   ' "$input" > "$output"
 }
@@ -86,7 +83,7 @@ if [ "$ARG" = "uninstall" ]; then
     echo "note: $TARGET does not exist"
   fi
   if [ -f "$PATCH" ] \
-    && { grep -qF "$MARKER_BEGIN" "$PATCH" || grep -qF "$LEGACY_MARKER" "$PATCH"; }; then
+    && grep -qF "$MARKER_BEGIN" "$PATCH"; then
     TEMP_PATCH="$(mktemp "${PATCH}.telegram.XXXXXX")"
     strip_managed_patch "$PATCH" "$TEMP_PATCH"
     mv "$TEMP_PATCH" "$PATCH"

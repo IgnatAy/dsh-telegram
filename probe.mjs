@@ -7,7 +7,7 @@
  *      `apply`) — this fails fast if `scripts/build.sh` has not run or the
  *      runtime peer-resolution links are missing.
  *   2. When `dsh` is on PATH, the selected profile contains the plugin row
- *      created by `setup-wsl.sh` (the default is `web`).
+ *      created by `install.sh` (the default is `web`).
  *
  * Usage:  node probe.mjs            (run from this repository root)
  */
@@ -59,7 +59,7 @@ try {
   if (dump.includes('telegram')) {
     console.log(`probe: profile ${profile} composition contains the telegram row`)
   } else {
-    console.error(`probe: profile ${profile} composition does NOT contain a telegram row — run \`./setup-wsl.sh\` first`)
+    console.error(`probe: profile ${profile} composition does NOT contain a telegram row — run \`./install.sh\` first`)
     failed = true
   }
 } catch (error) {

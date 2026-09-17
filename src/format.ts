@@ -134,49 +134,17 @@ function tableCells(line: string): string[] | undefined {
   return cells.length > 1 ? cells : undefined
 }
 
-function cellText(text: string): string {
-  return inlineRuns(text).map(part => part.text).join('')
-}
-
-/** Terminal-style display widths for CJK and emoji in the preformatted table. */
-function displayWidth(text: string): number {
-  let width = 0
-  for (const ch of text) {
-    const cp = ch.codePointAt(0)!
-    if (/\p{Mark}/u.test(ch) || cp === 0x200d) continue
-    width += cp >= 0x1100 && (cp <= 0x115f || cp === 0x2329 || cp === 0x232a
-      || (cp >= 0x2e80 && cp <= 0xa4cf) || (cp >= 0xac00 && cp <= 0xd7a3)
-      || (cp >= 0xf900 && cp <= 0xfaff) || (cp >= 0xfe10 && cp <= 0xfe6f)
-      || (cp >= 0xff01 && cp <= 0xff60) || (cp >= 0xffe0 && cp <= 0xffe6)
-      || cp >= 0x1f300) ? 2 : 1
-  }
-  return width
-}
-
-function renderTable(rows: string[][]): string {
-  const values = rows.map(row => row.map(cellText))
-  const widths = values[0].map((_, col) => Math.min(24, Math.max(3,
-    ...values.map(row => displayWidth(row[col] ?? '')))))
-  const border = widths.map(width => '─'.repeat(width)).join('─┼─')
-  const output: string[] = []
-  values.forEach((row, index) => {
-    const wrapped = widths.map((width, col) => {
-      const lines = ['']
-      for (const ch of row[col] ?? '') {
-        if (displayWidth(lines.at(-1)! + ch) > width) lines.push('')
-        lines[lines.length - 1] += ch
-      }
-      return lines
+/** Narrow-screen fallback: preserve each cell without fixed-width grids. */
+function tableRuns(rows: string[][]): Run[] {
+  const result: Run[] = []
+  for (const [index, row] of rows.slice(1).entries()) {
+    if (index) result.push(run('\n\n'))
+    row.forEach((cell, col) => {
+      if (col) result.push(run('\n'))
+      result.push(...inlineRuns(rows[0][col], true), run('：'), ...inlineRuns(cell))
     })
-    for (let line = 0; line < Math.max(...wrapped.map(cell => cell.length)); line++) {
-      output.push(widths.map((width, col) => {
-        const value = wrapped[col][line] ?? ''
-        return value + ' '.repeat(width - displayWidth(value))
-      }).join(' │ ').trimEnd())
-    }
-    if (index === 0) output.push(border)
-  })
-  return output.join('\n')
+  }
+  return result.length ? result : inlineRuns(rows[0].join(' · '), true)
 }
 
 function markdownRuns(text: string): Run[] {
@@ -255,7 +223,7 @@ function markdownRuns(text: string): Run[] {
         if (!cells || cells.length !== header.length) break
         rows.push(cells); i++
       }
-      result.push(run(renderTable(rows), '<pre>', '</pre>'))
+      result.push(...tableRuns(rows))
     } else {
       const heading = /^ {0,3}#{1,6}[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/.exec(line)
       result.push(...inlineRuns(heading?.[1] ?? line, !!heading))
@@ -272,6 +240,130 @@ function renderRun(part: Run): string {
 /** Convert the supported Markdown subset to independently splittable Telegram HTML. */
 export function markdownToHtml(text: string): string {
   return markdownRuns(text).map(renderRun).join('').replace(/<\/blockquote><blockquote>/g, '')
+}
+
+/** Native Rich HTML only; never pass this output to sendMessage(parse_mode=HTML).
+ * Block spacing belongs to Telegram, not literal blank lines inside paragraphs.
+ * Model-supplied HTML is escaped, and images remain links rather than uploads.
+ */
+export function markdownToRichHtml(text: string): string {
+  const lines = text.replace(/\r\n?/g, '\n').split('\n')
+  const output: string[] = []
+  let paragraph: string[] = []
+  const inline = (value: string): string => inlineRuns(value).map(renderRun).join('')
+  const flush = (): void => {
+    if (paragraph.length) output.push(`<p>${paragraph.map(inline).join('<br>')}</p>`)
+    paragraph = []
+  }
+  const listItem = (line: string) => /^( *)(?:([-+*])|(\d+)[.)])[ \t]+(.+)$/.exec(line)
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]
+    if (!line.trim()) { flush(); continue }
+    const fence = /^\s*(`{3,}|~{3,}|'{3,}|‘{3,}|’{3,})([\w.+#-]*)\s*$/.exec(line.replace(/\\`/g, '`'))
+    if (fence) {
+      flush()
+      let end = i + 1
+      while (end < lines.length) {
+        const close = lines[end].replace(/\\`/g, '`').trim()
+        if (close.length >= fence[1].length && [...close].every(ch => ch === fence[1][0])) break
+        end++
+      }
+      let code = lines.slice(i + 1, end).join('\n')
+      if (line.includes('\\`')) code = code.replace(/\\([\\`*_[\]{}()#+.!|>~=-])/g, '$1')
+      const language = fence[2]
+      output.push(language ? `<pre><code class="language-${escapeHtml(language)}">${escapeHtml(code)}</code></pre>`
+        : `<pre>${escapeHtml(code)}</pre>`)
+      i = end
+      continue
+    }
+    if (/^ {0,3}>/.test(line)) {
+      flush()
+      const quoted: string[] = []
+      while (i < lines.length && /^ {0,3}>/.test(lines[i])) {
+        quoted.push(lines[i++].replace(/^(?: {0,3}>[ \t]?)+/, ''))
+      }
+      i--
+      const alerts: Record<string, string> = { NOTE: '提示', TIP: '建议', IMPORTANT: '重要', WARNING: '警告', CAUTION: '注意' }
+      const alert = /^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]$/.exec(quoted[0])
+      if (alert) quoted[0] = `**${alerts[alert[1]]}**`
+      output.push(`<blockquote>${quoted.map(inline).join('<br>')}</blockquote>`)
+      continue
+    }
+    if (/^ {0,3}(?:(?:\*[ \t]*){3,}|(?:-[ \t]*){3,}|(?:_[ \t]*){3,})$/.test(line)) {
+      flush(); output.push('<hr/>'); continue
+    }
+    const header = tableCells(line)
+    const separator = tableCells(lines[i + 1] ?? '')
+    if (header && separator?.length === header.length && separator.every(cell => /^:?-{3,}:?$/.test(cell))) {
+      flush()
+      const rows = [header]
+      i++
+      while (i + 1 < lines.length) {
+        const cells = tableCells(lines[i + 1])
+        if (!cells || cells.length !== header.length) break
+        rows.push(cells); i++
+      }
+      if (header.length > 20) {
+        output.push(`<p>${tableRuns(rows).map(renderRun).join('').replace(/\n/g, '<br>')}</p>`)
+      } else {
+        output.push('<table>' + rows.map((row, index) => '<tr>' + row.map(cell => {
+          const tag = index === 0 ? 'th' : 'td'
+          return `<${tag}>${inline(cell)}</${tag}>`
+        }).join('') + '</tr>').join('') + '</table>')
+      }
+      continue
+    }
+    const heading = /^ {0,3}(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/.exec(line)
+    if (heading) {
+      flush(); output.push(`<h${heading[1].length}>${inline(heading[2])}</h${heading[1].length}>`); continue
+    }
+    const item = listItem(line)
+    if (item) {
+      flush()
+      const renderList = (start: number, depth: number): { html: string; end: number } => {
+        const first = listItem(lines[start])!
+        const indent = first[1].length
+        const ordered = !!first[3]
+        const tag = ordered ? 'ol' : 'ul'
+        const items: string[] = []
+        let end = start
+        while (end < lines.length) {
+          const next = listItem(lines[end])
+          if (!next || next[1].length < indent || !!next[3] !== ordered) break
+          let content = inline(next[4])
+          end++
+          while (end < lines.length) {
+            const nested = listItem(lines[end])
+            if (nested && nested[1].length > indent && depth < 6) {
+              const child = renderList(end, depth + 1)
+              content += child.html
+              end = child.end
+            } else if (!nested && /^\s+\S/.test(lines[end])) {
+              content += '<br>' + inline(lines[end++].trim())
+            } else if (!lines[end].trim() && listItem(lines[end + 1] ?? '')) {
+              end++
+            } else break
+          }
+          items.push(`<li${ordered ? ` value="${next[3]}"` : ''}>${content}</li>`)
+        }
+        return { html: `<${tag}>${items.join('')}</${tag}>`, end }
+      }
+      const list = renderList(i, 0)
+      output.push(list.html)
+      i = list.end - 1
+      continue
+    }
+    if (/^(?: {4}|\t)/.test(line) && paragraph.length === 0) {
+      const code: string[] = []
+      while (i < lines.length && /^(?: {4}|\t)/.test(lines[i])) code.push(lines[i++].replace(/^(?: {4}|\t)/, ''))
+      i--
+      output.push(`<pre>${escapeHtml(code.join('\n'))}</pre>`)
+      continue
+    }
+    paragraph.push(line)
+  }
+  flush()
+  return output.join('')
 }
 
 /** One independently valid Telegram message in HTML and plain-text forms. */
