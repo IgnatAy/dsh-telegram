@@ -97,6 +97,8 @@ export interface TelegramClientLike {
     /** Native Rich Markdown (including official HTML extensions); drafts expire after 30 seconds. */
     sendRichMessageDraft(chatId: number, draftId: number, markdown: string, signal?: AbortSignal): Promise<boolean>;
     sendRichMessage(chatId: number, markdown: string, signal?: AbortSignal, replyMarkup?: TelegramReplyMarkup): Promise<TelegramMessage>;
+    /** Replace rich content and its inline keyboard in a single request. */
+    editRichMessage(chatId: number, messageId: number, markdown: string, signal?: AbortSignal, replyMarkup?: TelegramInlineKeyboardMarkup): Promise<TelegramMessage>;
     /** Fetch the bot identity; validates the token. */
     getMe(signal?: AbortSignal): Promise<TelegramUser>;
     /** Long-poll for updates at or after `offset`. */
@@ -191,6 +193,7 @@ export declare class TelegramClient implements TelegramClientLike {
     sendChatAction(chatId: number, action: string, signal?: AbortSignal): Promise<boolean>;
     sendRichMessageDraft(chatId: number, draftId: number, markdown: string, signal?: AbortSignal): Promise<boolean>;
     sendRichMessage(chatId: number, markdown: string, signal?: AbortSignal, replyMarkup?: TelegramReplyMarkup): Promise<TelegramMessage>;
+    editRichMessage(chatId: number, messageId: number, markdown: string, signal?: AbortSignal, replyMarkup?: TelegramInlineKeyboardMarkup): Promise<TelegramMessage>;
     /**
      * Register the bot's slash-command list; Telegram shows it in the `/` menu.
      * @param commands - `{ command, description }` pairs (command without the leading slash).

@@ -195,6 +195,17 @@ describe('TelegramClient', () => {
     }
   })
 
+  it('edits rich content and keyboard together on the original message', async () => {
+    const fetch = fetchMock(async () => jsonResponse({ ok: true, result: { message_id: 8 } }))
+    const client = new TelegramClient('token', { fetch })
+    const markup = { inline_keyboard: [[{ text: 'Back', callback_data: 'menu:abc:0' }]] }
+    await client.editRichMessage(7, 8, '# Models\n\n- Flash', undefined, markup)
+    expect(String(fetch.mock.calls[0]![0])).toContain('/editMessageText')
+    expect(JSON.parse(fetch.mock.calls[0]![1]!.body as string)).toEqual({
+      chat_id: 7, message_id: 8, rich_message: { markdown: '# Models\n\n- Flash' }, reply_markup: markup,
+    })
+  })
+
   it('sendMessage forwards inline keyboards and ForceReply markup', async () => {
     const fetchImpl = fetchMock(async () => jsonResponse({
       ok: true,

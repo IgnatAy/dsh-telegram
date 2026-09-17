@@ -112,6 +112,8 @@ export interface TelegramClientLike {
   /** Native Rich Markdown (including official HTML extensions); drafts expire after 30 seconds. */
   sendRichMessageDraft(chatId: number, draftId: number, markdown: string, signal?: AbortSignal): Promise<boolean>
   sendRichMessage(chatId: number, markdown: string, signal?: AbortSignal, replyMarkup?: TelegramReplyMarkup): Promise<TelegramMessage>
+  /** Replace rich content and its inline keyboard in a single request. */
+  editRichMessage(chatId: number, messageId: number, markdown: string, signal?: AbortSignal, replyMarkup?: TelegramInlineKeyboardMarkup): Promise<TelegramMessage>
   /** Fetch the bot identity; validates the token. */
   getMe(signal?: AbortSignal): Promise<TelegramUser>
   /** Long-poll for updates at or after `offset`. */
@@ -365,6 +367,15 @@ export class TelegramClient implements TelegramClientLike {
   sendRichMessage(chatId: number, markdown: string, signal?: AbortSignal, replyMarkup?: TelegramReplyMarkup): Promise<TelegramMessage> {
     return this.call('sendRichMessage', {
       chat_id: chatId,
+      rich_message: { markdown },
+      ...(replyMarkup === undefined ? {} : { reply_markup: replyMarkup }),
+    }, signal)
+  }
+
+  editRichMessage(chatId: number, messageId: number, markdown: string, signal?: AbortSignal, replyMarkup?: TelegramInlineKeyboardMarkup): Promise<TelegramMessage> {
+    return this.call('editMessageText', {
+      chat_id: chatId,
+      message_id: messageId,
       rich_message: { markdown },
       ...(replyMarkup === undefined ? {} : { reply_markup: replyMarkup }),
     }, signal)

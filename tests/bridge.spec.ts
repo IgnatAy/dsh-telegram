@@ -218,6 +218,11 @@ function createHarness(
     downloadFile: Mock
   } = {
     sendRichMessageDraft: vi.fn(async () => true),
+    editRichMessage: vi.fn(async (chatId: number, messageId: number, text: string, _signal?: AbortSignal, replyMarkup?: TelegramReplyMarkup) => {
+      // Record rendered snapshots; an edit preserves the actual Telegram message ID.
+      sent.push({ messageId, chatId, text, replyMarkup })
+      return { message_id: messageId, chat: { id: chatId, type: 'private' }, date: 0 }
+    }),
     sendRichMessage: vi.fn(async (chatId: number, text: string, _signal?: AbortSignal, replyMarkup?: TelegramReplyMarkup) => {
       const messageId = nextMessageId++
       sent.push({ messageId, chatId, text, replyMarkup })
@@ -601,6 +606,26 @@ describe('TelegramBridge', () => {
     expect(h.client.sendMessage).not.toHaveBeenCalled()
   })
 
+  it('keeps navigation, selection and repeated refreshes in one panel with model names only', async () => {
+    const h = createHarness()
+    await dispatch(h, update({ text: '/menu' }))
+    const messageId = menuButtons(h).panel.messageId
+    expect(h.sent.at(-1)?.text).toContain('| 项目 | 状态 |')
+    expect(h.sent.at(-1)?.text).toContain('\n\n---\n\n')
+    await clickMenu(h, '切换模型')
+    const { panel, buttons } = menuButtons(h)
+    expect(panel.text).not.toContain('deepseek-official')
+    expect(panel.text).not.toContain('deepseek-v4-flash')
+    expect(buttons.some(button => button.text === '✓ DeepSeek V4 Flash')).toBe(true)
+    await clickMenu(h, 'V4 Pro')
+    await clickMenu(h, '刷新状态')
+    await clickMenu(h, '刷新状态')
+    expect(menuButtons(h).panel.messageId).toBe(messageId)
+    expect(h.client.sendRichMessage).toHaveBeenCalledTimes(1)
+    expect(h.client.editRichMessage).toHaveBeenCalledTimes(4)
+    expect(h.sent.at(-1)?.text).not.toContain('deepseek-v4-pro')
+  })
+
   it.each(['use', 'model', 'stop', 'reasoning', 'status'])('removes /%s instead of retaining a hidden handler', async command => {
     const h = createHarness()
     await dispatch(h, update({ text: `/${command}` }))
@@ -649,7 +674,7 @@ describe('TelegramBridge', () => {
     await dispatch(h, callback)
     expect(h.ctx.agents.create).toHaveBeenCalledTimes(1)
     expect(h.client.answerCallbackQuery).toHaveBeenLastCalledWith(expect.any(String), expect.stringContaining('失效'), undefined, expect.any(AbortSignal))
-    expect(h.client.editMessageReplyMarkup).toHaveBeenCalledWith(7, panel.messageId, { inline_keyboard: [] }, expect.any(AbortSignal))
+    expect(h.client.editRichMessage).toHaveBeenCalledWith(7, panel.messageId, expect.any(String), expect.any(AbortSignal), expect.objectContaining({ inline_keyboard: expect.any(Array) }))
   })
 
   it('confirms deletion and prevents an old confirmation from deleting a different session', async () => {
@@ -1963,6 +1988,7 @@ describe('TelegramBridge', () => {
   it('runs the production default sleep cadence with a client seam', async () => {
     const client = {
       sendRichMessageDraft: vi.fn(async () => true),
+      editRichMessage: vi.fn(),
       sendRichMessage: vi.fn(async () => ({ message_id: 1, chat: { id: 7, type: 'private' }, date: 0 })),
       getMe: vi.fn(async () => ({ id: 1, is_bot: true })),
       getUpdates: vi.fn(async () => [] as TelegramUpdate[]),
