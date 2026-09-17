@@ -22,6 +22,10 @@ export declare class TelegramProgress {
     private phase;
     private tools;
     private completed;
+    private readonly history;
+    private readonly latestTextEntries;
+    private latestAnswer;
+    private lastPublished;
     private paused;
     private waitingForUser;
     private disposed;
@@ -44,8 +48,11 @@ export declare class TelegramProgress {
     stopByUser(): void;
     /** A terminal message clears a tool-only/failed draft even without an assistant answer. */
     terminalNotice(reason: string): string | undefined;
-    /** Rich final content keeps recent tool outcomes in a collapsed section. */
-    finalHtml(text: string): string | undefined;
+    /** Persisted process content is folded; the latest answer remains outside. */
+    finalMarkdown(text: string): string;
+    /** Include late tool results and reasoning-only turns in the terminal delivery. */
+    finishMarkdown(notice?: string): string | undefined;
+    private processDetails;
     private toolLines;
     private details;
     private status;

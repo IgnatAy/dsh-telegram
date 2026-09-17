@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Preserve committed DSH reasoning, intermediate replies, tool arguments and textual results in a collapsed final process record. Keep the final answer outside it and retain late results and reasoning-only turns.
+
+- Pass assistant replies and drafts directly as native Rich Markdown, enabling the official task-list, LaTeX, footnote, media, and Rich HTML syntax without a lossy local renderer. Remove rich-to-ordinary fallback and the 24,000-character downgrade; document native limits and integration requirements.
+
 - Render native Rich HTML blocks in final replies and streaming previews: headings, tables, lists, quotations, and dividers. Remove blank-line padding around blocks; replace fixed-width fallback tables with field/value lists and update the injected mobile-formatting guidance.
 
 - Route Telegram native Stop and `/stop` through one current-task cancellation handler, including paused previews and pending user questions, without draft-ID gating.
@@ -15,7 +19,7 @@
 - Coalesce preview updates, renew long-running drafts, and fall back to plain drafts or one edited progress message when the server rejects newer methods.
 - Connect native Stop controls to the current Agent; reject stale draft controls and stop preview updates during user questions, cancellation, session changes, and shutdown.
 - Preserve structured Telegram rate-limit errors, respect retry delays, and avoid automatically resending messages after ambiguous transport failures.
-- Thinking is shown as a status; raw reasoning, tool arguments, and tool result bodies are not forwarded. Full terminal streaming is not included.
+- Draft thinking remains a compact status. Final replies now retain committed reasoning and tool text in the collapsed process record; live terminal streaming is not included.
 
 ## 0.2.2
 

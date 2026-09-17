@@ -94,9 +94,9 @@ export interface TelegramUpdate {
 }
 /** Runtime seam surface tests substitute with a fake. */
 export interface TelegramClientLike {
-    /** Native private-chat previews expire after 30 seconds. */
-    sendRichMessageDraft(chatId: number, draftId: number, html: string, signal?: AbortSignal): Promise<boolean>;
-    sendRichMessage(chatId: number, html: string, signal?: AbortSignal): Promise<TelegramMessage>;
+    /** Native Rich Markdown (including official HTML extensions); drafts expire after 30 seconds. */
+    sendRichMessageDraft(chatId: number, draftId: number, markdown: string, signal?: AbortSignal): Promise<boolean>;
+    sendRichMessage(chatId: number, markdown: string, signal?: AbortSignal): Promise<TelegramMessage>;
     /** Fetch the bot identity; validates the token. */
     getMe(signal?: AbortSignal): Promise<TelegramUser>;
     /** Long-poll for updates at or after `offset`. */
@@ -189,8 +189,8 @@ export declare class TelegramClient implements TelegramClientLike {
      * @returns whether the action was accepted.
      */
     sendChatAction(chatId: number, action: string, signal?: AbortSignal): Promise<boolean>;
-    sendRichMessageDraft(chatId: number, draftId: number, html: string, signal?: AbortSignal): Promise<boolean>;
-    sendRichMessage(chatId: number, html: string, signal?: AbortSignal): Promise<TelegramMessage>;
+    sendRichMessageDraft(chatId: number, draftId: number, markdown: string, signal?: AbortSignal): Promise<boolean>;
+    sendRichMessage(chatId: number, markdown: string, signal?: AbortSignal): Promise<TelegramMessage>;
     /**
      * Register the bot's slash-command list; Telegram shows it in the `/` menu.
      * @param commands - `{ command, description }` pairs (command without the leading slash).

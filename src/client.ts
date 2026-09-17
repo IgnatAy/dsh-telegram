@@ -109,9 +109,9 @@ export interface TelegramUpdate {
 
 /** Runtime seam surface tests substitute with a fake. */
 export interface TelegramClientLike {
-  /** Native private-chat previews expire after 30 seconds. */
-  sendRichMessageDraft(chatId: number, draftId: number, html: string, signal?: AbortSignal): Promise<boolean>
-  sendRichMessage(chatId: number, html: string, signal?: AbortSignal): Promise<TelegramMessage>
+  /** Native Rich Markdown (including official HTML extensions); drafts expire after 30 seconds. */
+  sendRichMessageDraft(chatId: number, draftId: number, markdown: string, signal?: AbortSignal): Promise<boolean>
+  sendRichMessage(chatId: number, markdown: string, signal?: AbortSignal): Promise<TelegramMessage>
   /** Fetch the bot identity; validates the token. */
   getMe(signal?: AbortSignal): Promise<TelegramUser>
   /** Long-poll for updates at or after `offset`. */
@@ -356,14 +356,14 @@ export class TelegramClient implements TelegramClientLike {
     return this.call<boolean>('sendChatAction', { chat_id: chatId, action }, signal)
   }
 
-  sendRichMessageDraft(chatId: number, draftId: number, html: string, signal?: AbortSignal): Promise<boolean> {
+  sendRichMessageDraft(chatId: number, draftId: number, markdown: string, signal?: AbortSignal): Promise<boolean> {
     return this.call('sendRichMessageDraft', {
-      chat_id: chatId, draft_id: draftId, rich_message: { html }, can_stop: true,
+      chat_id: chatId, draft_id: draftId, rich_message: { markdown }, can_stop: true,
     }, signal)
   }
 
-  sendRichMessage(chatId: number, html: string, signal?: AbortSignal): Promise<TelegramMessage> {
-    return this.call('sendRichMessage', { chat_id: chatId, rich_message: { html } }, signal)
+  sendRichMessage(chatId: number, markdown: string, signal?: AbortSignal): Promise<TelegramMessage> {
+    return this.call('sendRichMessage', { chat_id: chatId, rich_message: { markdown } }, signal)
   }
 
   /**

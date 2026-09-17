@@ -3,7 +3,7 @@ import type { AssistantStreamFrame } from '@deepseek-ai/dsh-agent'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { TelegramApiError } from './client.js'
 import type { TelegramClientLike } from './client.js'
-import { escapeHtml, markdownToRichHtml } from './format.js'
+import { escapeHtml } from './format.js'
 
 interface ToolProgress {
   id: string
@@ -38,6 +38,10 @@ export class TelegramProgress {
   private phase = '正在思考'
   private tools: ToolProgress[] = []
   private completed = 0
+  private readonly history: { title: string, text: string }[] = []
+  private readonly latestTextEntries = new Set<number>()
+  private latestAnswer = ''
+  private lastPublished = ''
   private paused = false
   private waitingForUser = false
   private disposed = false
@@ -89,7 +93,20 @@ export class TelegramProgress {
 
   event(event: SessionEvent): void {
     if (this.disposed) return
-    if (event.type === 'tool/call') {
+    if (event.type === 'assistant/message') {
+      this.latestTextEntries.clear()
+      this.latestAnswer = ''
+      for (const block of event.data.message.content) {
+        if (block.type === 'reasoning' || block.type === 'text') {
+          if (block.type === 'text') {
+            this.latestTextEntries.add(this.history.length)
+            this.latestAnswer += block.text
+          }
+          this.history.push({ title: block.type === 'reasoning' ? '思考' : '中间输出', text: block.text })
+        }
+      }
+    } else if (event.type === 'tool/call') {
+      this.history.push({ title: `工具调用 · ${event.data.name}`, text: event.data.arguments })
       // Keep active calls plus a bounded recent history.
       this.tools = this.tools.filter((tool, index) => tool.ended === undefined || index >= this.tools.length - 12)
       this.tools.push({ id: event.data.callId, name: clip(event.data.name, 80), started: event.time })
@@ -99,6 +116,11 @@ export class TelegramProgress {
     } else if (event.type === 'tool/result') {
       for (const block of event.data.message.content) {
         if (block.type !== 'tool-result') continue
+        this.history.push({
+          title: `工具结果 · ${this.tools.find(tool => tool.id === block.toolCallId)?.name ?? block.toolCallId}${block.isError ? ' · 失败' : ''}`,
+          text: block.content.map(part => part.type === 'text' || part.type === 'reasoning'
+            ? part.text : `[${part.type}]`).join('\n'),
+        })
         const tool = this.tools.find(tool => tool.id === block.toolCallId && tool.ended === undefined)
         if (tool !== undefined) {
           tool.ended = event.time
@@ -160,11 +182,34 @@ export class TelegramProgress {
     return 'ℹ️ **任务已结束**'
   }
 
-  /** Rich final content keeps recent tool outcomes in a collapsed section. */
-  finalHtml(text: string): string | undefined {
-    if (text.length > 24000) return undefined
-    const body = markdownToRichHtml(text)
-    return `${body}${this.details()}`
+  /** Persisted process content is folded; the latest answer remains outside. */
+  finalMarkdown(text: string): string {
+    // Put trusted metadata first: an unfinished model fence must not swallow it.
+    const details = this.processDetails(text)
+    this.lastPublished = details ? `${details}\n\n${text}` : text
+    return this.lastPublished
+  }
+
+  /** Include late tool results and reasoning-only turns in the terminal delivery. */
+  finishMarkdown(notice?: string): string | undefined {
+    if (this.stoppedByUser || this.history.length === 0) return undefined
+    const previous = this.lastPublished
+    const result = this.finalMarkdown(notice ?? this.latestAnswer)
+    return result === previous ? undefined : result
+  }
+
+  private processDetails(answer: string): string {
+    const entries = this.history.filter((entry, index) => entry.text !== ''
+      && !(answer === this.latestAnswer && this.latestTextEntries.has(index)))
+    if (entries.length === 0) return this.details()
+    // Treat recorded content as text, so literal HTML/fences cannot escape the
+    // disclosure or consume the final answer. Preserve all text, including newlines.
+    const body = entries.map(entry => {
+      const text = escapeHtml(entry.text)
+      const content = entry.title.startsWith('工具') ? `<pre>${text}</pre>` : `<p>${text.replace(/\n/g, '<br>')}</p>`
+      return `<p><b>${escapeHtml(entry.title)}</b></p>${content}`
+    }).join('')
+    return `<details><summary>思考与运行记录 · 已完成 ${this.completed} 次工具调用</summary>${body}</details>`
   }
 
   private toolLines(): string[] {
@@ -217,6 +262,6 @@ export class TelegramProgress {
   private async send(): Promise<void> {
     const status = this.status()
     await this.client.sendRichMessageDraft(this.chatId, this.draftId,
-      `<tg-thinking>${escapeHtml(status)}</tg-thinking>${this.details()}${this.text ? markdownToRichHtml(this.text) : ''}`, this.signal)
+      `<tg-thinking>${escapeHtml(status)}</tg-thinking>\n\n${this.details()}\n\n${this.text}`, this.signal)
   }
 }

@@ -11,11 +11,6 @@
 export declare function escapeHtml(text: string): string;
 /** Convert the supported Markdown subset to independently splittable Telegram HTML. */
 export declare function markdownToHtml(text: string): string;
-/** Native Rich HTML only; never pass this output to sendMessage(parse_mode=HTML).
- * Block spacing belongs to Telegram, not literal blank lines inside paragraphs.
- * Model-supplied HTML is escaped, and images remain links rather than uploads.
- */
-export declare function markdownToRichHtml(text: string): string;
 /** One independently valid Telegram message in HTML and plain-text forms. */
 export interface TelegramMessageChunk {
     readonly html: string;

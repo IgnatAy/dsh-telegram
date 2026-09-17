@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { escapeHtml, markdownToRichHtml, markdownToHtml, markdownToHtmlChunks, splitMessage } from '../src/format.ts'
+import { escapeHtml, markdownToHtml, markdownToHtmlChunks, splitMessage } from '../src/format.ts'
 
 describe('escapeHtml', () => {
   it('escapes the five Telegram-special characters', () => {
@@ -247,56 +247,4 @@ describe('phone screenshot formatting regressions', () => {
       expect(stack).toEqual([])
     }
   })
-})
-
-describe('native Rich HTML', () => {
-  it('renders the screenshot structure with native blocks and no blank-line padding', () => {
-    const html = markdownToRichHtml('# 导航行业\n\n\n简介 **重点**\n\n---\n\n## 系统\n\n'
-      + '| 系统 | 进展 | 精度 |\n|---|---|---|\n| **GPS** | 很长的中文说明无需插入换行 | `L1C` |\n\n'
-      + '> [!NOTE]\n> 提示内容\n\n- 第一项\n- 第二项\n\n3. 第三项\n4. 第四项')
-    expect(html).toBe('<h1>导航行业</h1><p>简介 <b>重点</b></p><hr/><h2>系统</h2>'
-      + '<table><tr><th>系统</th><th>进展</th><th>精度</th></tr>'
-      + '<tr><td><b>GPS</b></td><td>很长的中文说明无需插入换行</td><td><code>L1C</code></td></tr></table>'
-      + '<blockquote><b>提示</b><br>提示内容</blockquote>'
-      + '<ul><li>第一项</li><li>第二项</li></ul><ol><li value="3">第三项</li><li value="4">第四项</li></ol>')
-    expect(html).not.toMatch(/<p><(?:table|blockquote)|─|<br><br>/)
-  })
-
-  it('keeps code literal, including tables, blank lines and unfinished streaming fences', () => {
-    const code = '| A | B |\n|---|---|\n\n---\n<b>literal</b>'
-    expect(markdownToRichHtml('```html\n' + code)).toBe(
-      '<pre><code class="language-html">' + escapeHtml(code) + '</code></pre>')
-    expect(markdownToRichHtml('```\n' + code + '\n```\n\nAfter')).toBe(
-      '<pre>' + escapeHtml(code) + '</pre><p>After</p>')
-    expect(markdownToRichHtml('    <b>literal</b>')).toBe('<pre>&lt;b&gt;literal&lt;/b&gt;</pre>')
-  })
-
-  it('escapes raw HTML, keeps image links, and preserves inline table formatting', () => {
-    const html = markdownToRichHtml('<hr/>\n\n![image](https://example.com/x.png)\n\n'
-      + '| A | B |\n|---|---|\n| x\\|y | [**link**](https://example.com) and `a|b` |')
-    expect(html).toContain('<p>&lt;hr/&gt;</p>')
-    expect(html).toContain('<a href="https://example.com/x.png">图片：image</a>')
-    expect(html).toContain('<td>x|y</td>')
-    expect(html).toContain('<a href="https://example.com"><b>link</b></a> and <code>a|b</code>')
-    expect(html).not.toContain('<img')
-  })
-
-  it('keeps incomplete table rows visible and falls back for tables beyond the API column limit', () => {
-    expect(markdownToRichHtml('| A | B |\n|---|---|\n| partial')).toContain('</table><p>| partial</p>')
-    const row = Array.from({ length: 21 }, (_, i) => `列${i}`).join(' | ')
-    const separator = Array(21).fill('---').join(' | ')
-    const html = markdownToRichHtml(row + '\n' + separator + '\n' + row)
-    expect(html).not.toContain('<table>')
-    expect(html).toContain('<b>列20</b>：列20')
-  })
-
-  it('keeps list continuations together and preserves deliberate numbering', () => {
-    expect(markdownToRichHtml('3. 第三项\n   补充说明\n\n7. 第七项\n\n正文')).toBe(
-      '<ol><li value="3">第三项<br>补充说明</li><li value="7">第七项</li></ol><p>正文</p>')
-  })
-})
-
-it('preserves nested lists inside their parent item', () => {
-  expect(markdownToRichHtml('1. 方向\n   - 电网\n   - 金融\n2. 建议')).toBe(
-    '<ol><li value="1">方向<ul><li>电网</li><li>金融</li></ul></li><li value="2">建议</li></ol>')
 })

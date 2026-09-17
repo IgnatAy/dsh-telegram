@@ -215,8 +215,11 @@ function createHarness(
     downloadFile: Mock
   } = {
     sendRichMessageDraft: vi.fn(async () => true),
-    // Exercise split HTML delivery by default; rich delivery is covered separately.
-    sendRichMessage: vi.fn(async () => { throw new TelegramApiError('invalid rich content', 400) }),
+    sendRichMessage: vi.fn(async (chatId: number, text: string) => {
+      const messageId = nextMessageId++
+      sent.push({ messageId, chatId, text })
+      return { message_id: messageId, chat: { id: chatId, type: 'private' }, date: 0 }
+    }),
     getMe: vi.fn(async () => ({ id: 1, is_bot: true })),
     getUpdates: vi.fn(async (offset?: number) => { polls.push(offset); return [] as TelegramUpdate[] }),
     sendMessage: vi.fn(async (
@@ -545,7 +548,7 @@ describe('TelegramBridge', () => {
     const h = createHarness()
     const delivered: string[] = []
     const transport = vi.fn(async (_url: unknown, init?: RequestInit): Promise<Response> => {
-      delivered.push(JSON.parse(init!.body as string).rich_message.html)
+      delivered.push(JSON.parse(init!.body as string).rich_message.markdown)
       if (delivered.length === 1) return new Promise(() => {})
       return new Response(JSON.stringify({ ok: true, result: { message_id: 900 + delivered.length } }))
     })
@@ -562,7 +565,7 @@ describe('TelegramBridge', () => {
     }
     await waitFor(() => h.actions.length === 3 ? true : undefined, 'typing remains responsive')
     await waitFor(() => delivered.length === 3 ? true : undefined, 'later replies after stalled response')
-    expect(delivered).toEqual(['<p>answer 1</p>', '<p>answer 2</p>', '<p>answer 3</p>'])
+    expect(delivered).toEqual(['answer 1', 'answer 2', 'answer 3'])
     expect(h.ctx.logger.error).toHaveBeenCalledWith('[telegram] session event failed: %s', expect.stringContaining('timed out'))
   })
 
@@ -583,22 +586,22 @@ describe('TelegramBridge', () => {
       await waitFor(() => rich.mock.calls.length === turn ? true : undefined, `turn ${turn} answer`)
       await settle()
     }
-    expect(rich.mock.calls.map(call => call[1])).toEqual(['<p>answer 1</p>', '<p>answer 2</p>', '<p>answer 3</p>'])
+    expect(rich.mock.calls.map(call => call[1])).toEqual(['answer 1', 'answer 2', 'answer 3'])
     expect(h.client.deleteMessages).not.toHaveBeenCalled()
   })
 
-  it('falls back to the existing answer renderer when rich persistence is rejected', async () => {
+  it.each([400, 404, 413, 429, 500])('does not downgrade a rejected rich reply (%s)', async (code) => {
     const h = createHarness()
     h.client.sendRichMessageDraft = vi.fn(async () => true)
-    h.client.sendRichMessage = vi.fn(async () => { throw new TelegramApiError('unsupported rich message', 400) })
+    h.client.sendRichMessage = vi.fn(async () => { throw new TelegramApiError('unsupported rich message', code) })
     h.bridge.start()
     const handle = await selectNew(h)
     h.emit(handle.agent.session.id, { type: 'turn/start', data: { turn: 1 } } as SessionEvent)
     h.emit(handle.agent.session.id, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: '**完整答案**' }] } } } as SessionEvent)
     h.emit(handle.agent.session.id, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } } as SessionEvent)
-    await waitFor(() => h.sent.length ? true : undefined, 'fallback answer')
-    expect(h.sent).toHaveLength(1)
-    expect(h.sent[0]?.text).toBe('<b>完整答案</b>')
+    await waitFor(() => h.ctx.logger.error.mock.calls.length ? true : undefined, 'rich rejection logged')
+    expect(h.sent).toHaveLength(0)
+    expect(h.client.sendRichMessage).toHaveBeenCalledTimes(1)
   })
 
   it('clears a failed draft with a terminal notice even when no text was produced', async () => {
@@ -1384,8 +1387,8 @@ describe('TelegramBridge', () => {
     const channelPrompt = boundAgentCtx.systemPrompt.context.mock.calls[0]?.[0].text as string
     expect(channelPrompt).toContain('仅适用于当前 Telegram 通道的回复')
     expect(channelPrompt).toContain('不要预先按 Telegram MarkdownV2 转义')
-    expect(channelPrompt).toContain('不使用 `[名称][ref]`')
-    expect(channelPrompt).toContain('不使用 `<details>`')
+    expect(channelPrompt).toContain('任务清单')
+    expect(channelPrompt).toContain('LaTeX')
     expect(channelPrompt).toContain('不限制用户要求生成的文件内容')
 
     const assemble = handlers.get('system-prompt/assemble')
@@ -1696,25 +1699,23 @@ describe('TelegramBridge', () => {
     await waitFor(() => h.sent.some(s => s.text.includes('未知命令')) ? true : undefined, 'unknown reply')
   })
 
-  it('delivers assistant text as split HTML messages', async () => {
+  it('delivers assistant text as native Markdown regardless of the ordinary message limit', async () => {
     const h = createHarness({ maxMessageLength: 12 })
     h.bridge.start()
     await waitFor(() => h.polls.length > 0 ? true : undefined, 'polling')
     await selectNew(h)
-    const long = 'a'.repeat(30)
+    const long = '- [x] 完成\n\n$$\\frac{1}{2}$$\n\n' + '中'.repeat(25000)
     h.emit(h.agents[0]!.agent.session.id, {
       type: 'assistant/message',
       data: { message: { content: [{ type: 'text', text: long }] } },
     } as SessionEvent)
-    // The final answer is delivered on turn/end; a lone assistant/message
-    // only records the text (the progress-message design).
     h.emit(h.agents[0]!.agent.session.id, {
       type: 'turn/end',
       data: { turn: 1, reason: { kind: 'completed' } },
     } as SessionEvent)
-    await waitFor(() => h.sent.length >= 3 ? true : undefined, 'chunks delivered')
+    await waitFor(() => h.sent.length === 1 ? true : undefined, 'native reply delivered')
     expect(h.sent.map(s => s.text).join('')).toBe(long)
-    expect(h.sent.every(s => s.parseMode === 'HTML')).toBe(true)
+    expect(h.sent.every(s => s.parseMode === undefined)).toBe(true)
   })
 
   it('ignores assistant messages without text blocks', async () => {
@@ -1730,35 +1731,13 @@ describe('TelegramBridge', () => {
     expect(h.sent.length).toBe(0)
   })
 
-  it('falls back to plain text when HTML delivery is rejected', async () => {
-    const h = createHarness()
-    h.bridge.start()
-    await waitFor(() => h.polls.length > 0 ? true : undefined, 'polling')
-    await selectNew(h)
-    h.client.sendMessage
-      .mockRejectedValueOnce(new Error('can\'t parse entities'))
-      .mockResolvedValue({ message_id: 1, chat: { id: 7, type: 'private' }, date: 0 })
-    h.emit(h.agents[0]!.agent.session.id, {
-      type: 'assistant/message',
-      data: { message: { content: [{ type: 'text', text: '<b>hi</b>' }] } },
-    } as SessionEvent)
-    h.emit(h.agents[0]!.agent.session.id, {
-      type: 'turn/end',
-      data: { turn: 1, reason: { kind: 'completed' } },
-    } as SessionEvent)
-    await waitFor(() => h.client.sendMessage.mock.calls.length >= 2 ? true : undefined, 'fallback sent')
-    const first = h.client.sendMessage.mock.calls[0] as [number, string, 'HTML' | undefined, AbortSignal]
-    const second = h.client.sendMessage.mock.calls[1] as [number, string, 'HTML' | undefined, AbortSignal]
-    expect(first.slice(0, 3)).toEqual([7, '&lt;b&gt;hi&lt;/b&gt;', 'HTML'])
-    expect(second.slice(0, 3)).toEqual([7, '<b>hi</b>', undefined])
-  })
-
   it('does not retry a transport failure as plain text and risk a duplicate', async () => {
     const h = createHarness()
     h.bridge.start()
     await waitFor(() => h.polls.length > 0 ? true : undefined, 'polling')
     await selectNew(h)
-    h.client.sendMessage.mockRejectedValue(new Error('network down'))
+    h.client.sendMessage.mockClear()
+    h.client.sendRichMessage = vi.fn(async () => { throw new Error('network down') })
     h.emit(h.agents[0]!.agent.session.id, {
       type: 'assistant/message',
       data: { message: { content: [{ type: 'text', text: 'hello' }] } },
@@ -1768,7 +1747,8 @@ describe('TelegramBridge', () => {
       data: { turn: 1, reason: { kind: 'completed' } },
     } as SessionEvent)
     await waitFor(() => h.ctx.logger.error.mock.calls.length > 0 ? true : undefined, 'error logged')
-    expect(h.client.sendMessage).toHaveBeenCalledTimes(1)
+    expect(h.client.sendRichMessage).toHaveBeenCalledTimes(1)
+    expect(h.client.sendMessage).not.toHaveBeenCalled()
   })
 
   it('logs a plain-text delivery failure from the command path', async () => {
@@ -1817,11 +1797,13 @@ describe('TelegramBridge', () => {
       type: 'assistant/message',
       data: { message: { content: [{ type: 'text', text: 'x'.repeat(40) }] } },
     } as SessionEvent)
-    await waitFor(() => h.sent.length === 4 ? true : undefined, 'separate intermediate outputs')
+    await waitFor(() => h.sent.length === 2 ? true : undefined, 'separate intermediate outputs')
     const [first, ...finalChunks] = h.sent
     expect(first?.text).toBe('first')
-    expect(finalChunks.map(message => message.text).join('')).toBe('x'.repeat(40))
-    expect(h.sent.every(message => message.text.length <= 16)).toBe(true)
+    expect(finalChunks[0]?.text).toContain('<details>')
+    expect(finalChunks[0]?.text).toContain('first')
+    expect(finalChunks[0]?.text.endsWith('x'.repeat(40))).toBe(true)
+    expect(finalChunks).toHaveLength(1)
     expect(h.client.editMessageText).not.toHaveBeenCalled()
 
     h.emit(sessionId, {
@@ -1832,6 +1814,25 @@ describe('TelegramBridge', () => {
     const deleted = h.client.deleteMessages.mock.calls[0]?.[1] as number[]
     expect(deleted).toContain(first!.messageId)
     for (const chunk of finalChunks) expect(deleted).not.toContain(chunk.messageId)
+  })
+
+  it('delivers a reasoning-only turn with late tool output inside the final disclosure', async () => {
+    const h = createHarness()
+    h.bridge.start()
+    await waitFor(() => h.polls.length > 0 ? true : undefined, 'polling')
+    await selectNew(h)
+    const sessionId = h.agents[0]!.agent.session.id
+    h.emit(sessionId, { type: 'turn/start', data: { turn: 1 } } as SessionEvent)
+    h.emit(sessionId, { type: 'assistant/message', data: { message: { content: [
+      { type: 'reasoning', text: '检查结果' },
+    ] } } } as SessionEvent)
+    h.emit(sessionId, { type: 'tool/result', time: 101000, data: { message: { content: [
+      { type: 'tool-result', toolCallId: 'a', content: [{ type: 'text', text: '已执行' }] },
+    ] } } } as SessionEvent)
+    h.emit(sessionId, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } } as SessionEvent)
+    const final = await waitFor(() => h.sent.find(message => message.text.includes('检查结果')), 'folded reasoning')
+    expect(final.text).toContain('<details>')
+    expect(final.text).toContain('已执行')
   })
 
   it('ignores non-delivery event kinds on known sessions', async () => {

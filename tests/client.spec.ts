@@ -1,3 +1,4 @@
+import { richExamples } from './fixtures/rich-markdown.ts'
 import { describe, expect, it, vi } from 'vitest'
 import type { Mock } from 'vitest'
 import { TelegramApiError, TelegramClient } from '../src/client.ts'
@@ -58,8 +59,19 @@ describe('TelegramClient', () => {
     await client.sendRichMessageDraft(7, 11, '<tg-thinking>搜索中</tg-thinking>')
     await client.sendRichMessage(7, '<p>完成</p>')
     const bodies = fetchImpl.mock.calls.map(call => JSON.parse(call[1]!.body as string))
-    expect(bodies[0]).toEqual({ chat_id: 7, draft_id: 11, rich_message: { html: '<tg-thinking>搜索中</tg-thinking>' }, can_stop: true })
-    expect(bodies[1]).toEqual({ chat_id: 7, rich_message: { html: '<p>完成</p>' } })
+    expect(bodies[0]).toEqual({ chat_id: 7, draft_id: 11, rich_message: { markdown: '<tg-thinking>搜索中</tg-thinking>' }, can_stop: true })
+    expect(bodies[1]).toEqual({ chat_id: 7, rich_message: { markdown: '<p>完成</p>' } })
+  })
+
+  it.each(richExamples)('passes native %s unchanged to both rich endpoints', async (_name, markdown) => {
+    const fetchImpl = fetchMock(async () => jsonResponse({ ok: true, result: true }))
+    const client = new TelegramClient('t:ok', { fetch: fetchImpl })
+    await client.sendRichMessageDraft(7, 11, markdown)
+    await client.sendRichMessage(7, markdown)
+    const bodies = fetchImpl.mock.calls.map(call => JSON.parse(call[1]!.body as string))
+    expect(bodies.map(body => body.rich_message)).toEqual([{ markdown }, { markdown }])
+    expect(fetchImpl.mock.calls.map(call => String(call[0]).split('/').at(-1)))
+      .toEqual(['sendRichMessageDraft', 'sendRichMessage'])
   })
 
   it('returns structured draft flood control without blocking the latest-preview queue', async () => {
