@@ -144,6 +144,7 @@ interface TelegramCollection {
   readonly sessionId: string
   readonly parts: CollectedPart[]
   readonly telegramMessageIds: Set<number>
+  statusMessageId?: number
 }
 
 /** Download candidate extracted from a Telegram photo or image document. */
@@ -953,18 +954,19 @@ export class TelegramBridge {
         }
         const existing = this.collectionFor(active)
         if (existing !== undefined) {
-          await this.safeSend(chatId, this.collectionStatus(existing, '已经处于收集模式'))
+          await this.sendCollectionStatus(existing, this.collectionStatus(existing, '已经处于收集模式'))
           break
         }
-        this.collections.set(String(chatId), {
+        const collection: TelegramCollection = {
           chatId,
           workspaceId: String(active.workspace.id),
           sessionId: active.sessionId,
           parts: [],
           telegramMessageIds: new Set(),
-        })
-        await this.safeSend(
-          chatId,
+        }
+        this.collections.set(String(chatId), collection)
+        await this.sendCollectionStatus(
+          collection,
           `📥 **已进入收集模式**\n\n现在可以按任意顺序发送文字、图片和文件。\n\n---\n\n${COLLECTION_ACTIONS}`,
         )
         break
@@ -987,8 +989,8 @@ export class TelegramBridge {
           break
         }
         this.collections.delete(String(chatId))
-        await this.safeSend(
-          chatId,
+        await this.sendCollectionStatus(
+          collection,
           '🗑 **已放弃本次收集**\n\n已经下载的图片仍保留在当前工作区的 `telegram-downloads` 文件夹中。',
         )
         break
@@ -1204,6 +1206,17 @@ export class TelegramBridge {
     return undefined
   }
 
+  /** Replace the previous collection notice only after its successor was sent. */
+  private async sendCollectionStatus(collection: TelegramCollection, text: string): Promise<void> {
+    const messageId = await this.safeSend(collection.chatId, text)
+    if (messageId === undefined) return
+    const previousId = collection.statusMessageId
+    collection.statusMessageId = messageId
+    if (previousId !== undefined && previousId !== messageId) {
+      await this.deleteMessageIds(collection.chatId, [previousId])
+    }
+  }
+
   /** Summarize an in-progress collection without exposing internal attachment ids. */
   private collectionStatus(collection: TelegramCollection, prefix = '已加入收集'): string {
     const textCount = collection.parts.filter(part => part.type === 'text' && part.text.trim() !== '').length
@@ -1302,7 +1315,7 @@ export class TelegramBridge {
       }
       collection.parts.push(...parts)
       collection.telegramMessageIds.add(message.message_id)
-      if (announce) await this.safeSend(message.chat.id, this.collectionStatus(collection))
+      if (announce) await this.sendCollectionStatus(collection, this.collectionStatus(collection))
       return true
     } catch (error) {
       await this.safeSend(message.chat.id, `⚠️ **收集失败**\n\n${richCodeBlock(messageOf(error))}`)
@@ -1323,8 +1336,8 @@ export class TelegramBridge {
     try {
       await this.submitParts(active, collection.parts, mode)
       this.collections.delete(String(active.chatId))
-      await this.safeSend(
-        active.chatId,
+      await this.sendCollectionStatus(
+        collection,
         mode === 'followup' ? '🕒 **已加入后续任务队列**' : '✅ **已提交收集内容**',
       )
     } catch (error) {

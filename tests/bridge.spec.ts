@@ -1438,6 +1438,11 @@ describe('TelegramBridge', () => {
         { ...update({ messageId: 43, text: '/send' }), update_id: 5 },
       ])
       await waitFor(() => active.agent.steer.mock.calls.length === 1 ? true : undefined, 'collection steered')
+      await waitFor(() => h.sent.find(message => message.text.includes('已提交收集内容')), 'collection submitted')
+      const notices = h.sent.filter(message => /已进入收集模式|已加入收集/.test(message.text))
+      expect(notices).toHaveLength(3)
+      const deletedIds = h.client.deleteMessages.mock.calls.flatMap(call => call[1] as number[])
+      expect(deletedIds).toEqual(notices.map(message => message.messageId))
       expect(active.agent.followup).not.toHaveBeenCalled()
       expect(h.ctx.attachments.saveImages).toHaveBeenCalledOnce()
       const content = (active.agent.steer.mock.calls[0]?.[0] as { content: Array<Record<string, unknown>> }).content

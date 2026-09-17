@@ -104,6 +104,8 @@ export declare class TelegramBridge {
     private showMenu;
     /** Return only a draft that still belongs to the exact active session. */
     private collectionFor;
+    /** Replace the previous collection notice only after its successor was sent. */
+    private sendCollectionStatus;
     /** Summarize an in-progress collection without exposing internal attachment ids. */
     private collectionStatus;
     /** Route declared raster documents through the existing image pipeline. */
