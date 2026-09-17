@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Cache the latest unsent complete output per bot/chat on disk; delete it on confirmed delivery and add `/resend` to recover it after outages or restarts without a menu entry.
+
+- Add `/menu` with status, paginated workspace/session/model catalogs, reasoning selection, session creation, and confirmed deletion. Bind callback actions to stable IDs and current selections; reject stale or repeated actions.
+- Remove `/use`, `/model`, `/stop`, `/reasoning`, and `/status`; retain native Telegram Stop. Localize command descriptions and update fixed prompts/help.
+- Send menus, fixed notices, and questions as native Rich Markdown with inline keyboards/ForceReply; eliminate their HTML/plain fallback.
+
 - Match DSH process counts and nested disclosures: intermediate messages at the first level, reasoning and paired tool details at the second. Derive reasoning/tool summaries from content and preserve Rich Markdown inside disclosures.
 
 - Preserve committed DSH reasoning, intermediate replies, tool arguments and textual results in a collapsed final process record. Keep the final answer outside it and retain late results and reasoning-only turns.

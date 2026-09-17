@@ -111,7 +111,7 @@ export interface TelegramUpdate {
 export interface TelegramClientLike {
   /** Native Rich Markdown (including official HTML extensions); drafts expire after 30 seconds. */
   sendRichMessageDraft(chatId: number, draftId: number, markdown: string, signal?: AbortSignal): Promise<boolean>
-  sendRichMessage(chatId: number, markdown: string, signal?: AbortSignal): Promise<TelegramMessage>
+  sendRichMessage(chatId: number, markdown: string, signal?: AbortSignal, replyMarkup?: TelegramReplyMarkup): Promise<TelegramMessage>
   /** Fetch the bot identity; validates the token. */
   getMe(signal?: AbortSignal): Promise<TelegramUser>
   /** Long-poll for updates at or after `offset`. */
@@ -362,8 +362,12 @@ export class TelegramClient implements TelegramClientLike {
     }, signal)
   }
 
-  sendRichMessage(chatId: number, markdown: string, signal?: AbortSignal): Promise<TelegramMessage> {
-    return this.call('sendRichMessage', { chat_id: chatId, rich_message: { markdown } }, signal)
+  sendRichMessage(chatId: number, markdown: string, signal?: AbortSignal, replyMarkup?: TelegramReplyMarkup): Promise<TelegramMessage> {
+    return this.call('sendRichMessage', {
+      chat_id: chatId,
+      rich_message: { markdown },
+      ...(replyMarkup === undefined ? {} : { reply_markup: replyMarkup }),
+    }, signal)
   }
 
   /**

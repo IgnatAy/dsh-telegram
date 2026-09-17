@@ -1,8 +1,8 @@
 /**
  * Telegram bridge plugin: relays Telegram chats to harness agent sessions
  * through the Bot API's long polling. Copied from Hermes' telegram platform
- * adapter design — per-chat sessions, user allowlist, HTML formatting,
- * 4096-char splitting, and a typing indicator — trimmed to the harness's
+ * adapter design — per-chat sessions, user allowlist, native rich formatting,
+ * inline menus, and a typing indicator — trimmed to the harness's
  * text-first seams. The selected DSH profile supplies the LLM adapter,
  * agent spine, sessions, and tools.
  *

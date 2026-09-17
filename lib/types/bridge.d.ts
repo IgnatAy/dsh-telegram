@@ -2,7 +2,7 @@
  * Telegram→harness bridge: owns the long-polling loop, per-chat agent
  * sessions, slash commands, and delivery of assistant output back to
  * Telegram. The design mirrors Hermes' telegram platform adapter (per-chat
- * sessions, allowlist, HTML formatting, 4096-char splitting, typing
+ * sessions, allowlist, native Rich Markdown, inline menus, typing
  * indicator), trimmed to the harness's text-first seams.
  * @module telegram/bridge
  */
@@ -22,14 +22,16 @@ export interface TelegramBridgeOptions {
     provider?: string;
     /** Model id passed to each created agent. */
     model?: string;
-    /** Per-chunk message length limit (Telegram caps at 4096). */
+    /** Legacy option retained for config compatibility; native rich messages are not split. */
     maxMessageLength?: number;
     /** Long-polling timeout in seconds. */
     pollingTimeoutSec?: number;
     /** Agent preset id mounted on each created agent (requires `agent-presets`). */
     preset?: string;
-    /** Default reasoning effort (off|low|high|max); `/reasoning` overrides per chat. */
+    /** Default reasoning effort (off|low|high|max); the menu overrides per chat. */
     reasoningEffort?: TelegramReasoningEffort | '';
+    /** Result cache root; defaults to DSH_HOME/telegram-results. */
+    resultCacheDirectory?: string;
     /** Client seam; tests substitute a fake. */
     client?: TelegramClientLike;
     /** Delay seam; tests substitute an instant sleep. */
@@ -38,7 +40,7 @@ export interface TelegramBridgeOptions {
 /**
  * Bridge between Telegram chats and harness agent sessions. One agent
  * session per chat; incoming text becomes a user message via `followup`,
- * and assistant messages are delivered back as (split, HTML-formatted)
+ * and assistant messages are delivered back as native rich
  * Telegram messages. Lifecycle: {@link TelegramBridge.start} begins polling;
  * {@link TelegramBridge.stop} releases Telegram bindings and only the Agent
  * handles that this bridge created or resumed itself.
@@ -50,7 +52,6 @@ export declare class TelegramBridge {
     private readonly allowAllUsers;
     private readonly provider;
     private readonly model;
-    private readonly maxMessageLength;
     private readonly sleep;
     /** Agent preset id mounted on each created agent; undefined leaves the composition default. */
     private readonly preset;
@@ -58,11 +59,12 @@ export declare class TelegramBridge {
     private readonly defaultEffort;
     private readonly chats;
     private readonly chatsBySession;
-    /** Handles owned by Telegram stay live across `/use` switches. */
+    /** Handles owned by Telegram stay live across `/menu` switches. */
     private readonly ownedAgents;
     /** Explicit `/collect` drafts keyed by Telegram private-chat id. */
     private readonly collections;
     /** Human-input requests keyed by Telegram chat id; at most one per chat. */
+    private readonly resultCache;
     private readonly pendingQuestions;
     private readonly abortController;
     private offset;
@@ -70,6 +72,7 @@ export declare class TelegramBridge {
     private errorCount;
     private disposeEvents;
     private pollTask;
+    private readonly menus;
     private commandTask;
     private stopTask;
     /**
@@ -89,11 +92,16 @@ export declare class TelegramBridge {
     private pollLoop;
     /** Wait for the poll cadence/backoff, but release immediately during teardown. */
     private wait;
-    /** Shared cancellation for /stop and Telegram's native Stop button. */
+    /** Cancellation for Telegram's native Stop button. */
     private stopCurrentTask;
     private handleUpdate;
     private authorizedUser;
     private handleCommand;
+    /** Bind callbacks to the state shown, so an old delete cannot target a new session. */
+    private menuFingerprint;
+    private handleMenuCallback;
+    /** Paginated snapshot: callbacks capture stable IDs, never live catalog positions. */
+    private showMenu;
     /** Return only a draft that still belongs to the exact active session. */
     private collectionFor;
     /** Summarize an in-progress collection without exposing internal attachment ids. */
@@ -128,24 +136,18 @@ export declare class TelegramBridge {
     private stateFor;
     /** Read the adapter-owned model catalog and retain the current route if it is unlisted. */
     private loadModelCatalog;
-    /** Render one flat numbered model selector across provider groups. */
-    private formatModelCatalog;
     /** Resolve exact metadata for the model currently selected by one chat. */
     private resolveCurrentModel;
     /** Resolve display metadata without preventing unrelated selectors from rendering. */
     private currentModelInfoOrUndefined;
     /** Apply one route to chat-owned selection or the official selection of a borrowed Agent. */
     private applyChatSelection;
-    /** Render the complete per-chat selection shown before every no-argument selector. */
+    /** Render the current selection shared by menu pages. */
     private formatSelectionSummary;
     /** Build the default option plus the exact effort ids exposed by the selected model. */
     private reasoningChoices;
-    /** Render the exact reasoning choices validated by the selected model adapter. */
-    private formatReasoningChoices;
     /** Build the current numbered workspace/session catalog. */
     private loadCatalog;
-    /** Render one stable numbered catalog for `/use`. */
-    private formatCatalog;
     /** Resolve one numbered selection and bind the Telegram chat to it. */
     private useCatalogSelection;
     /** Create, attach, and bind a new session in an existing workspace. */
@@ -225,8 +227,7 @@ export declare class TelegramBridge {
     /** Stop the typing heartbeat for a chat. */
     private stopTyping;
     private chatFor;
-    private deliver;
-    /** Send a message; HTML failures fall back to plain text (Telegram rejects malformed entities). */
+    /** Fixed notices use the same native Rich Markdown transport as assistant replies. */
     private safeSend;
     private safeAction;
 }

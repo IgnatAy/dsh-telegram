@@ -1,6 +1,6 @@
 {
   "name": "dsh-telegram",
-  "description": "Telegram Bot API bridge plugin: relay Telegram chats to harness agent sessions (long polling, per-chat sessions, HTML formatting)",
+  "description": "Telegram Bot API bridge plugin: relay Telegram chats to harness agent sessions (long polling, per-chat sessions, rich messages and inline menus)",
   "version": "0.2.2",
   "private": true,
   "type": "module",

@@ -184,6 +184,17 @@ describe('TelegramClient', () => {
     expect(body).toMatchObject({ parse_mode: 'HTML' })
   })
 
+  it('sendRichMessage forwards native Markdown with inline keyboards or ForceReply', async () => {
+    const fetch = fetchMock(async () => new Response(JSON.stringify({ ok: true, result: { message_id: 1 } })))
+    const client = new TelegramClient('token', { fetch })
+    for (const markup of [{ inline_keyboard: [[{ text: 'Menu', callback_data: 'menu:abc:0' }]] }, { force_reply: true as const }]) {
+      await client.sendRichMessage(7, '# Panel\n\n**Ready**', undefined, markup)
+      const body = JSON.parse(fetch.mock.calls.at(-1)![1]!.body as string)
+      expect(body).toEqual({ chat_id: 7, rich_message: { markdown: '# Panel\n\n**Ready**' }, reply_markup: markup })
+      expect(body).not.toHaveProperty('parse_mode')
+    }
+  })
+
   it('sendMessage forwards inline keyboards and ForceReply markup', async () => {
     const fetchImpl = fetchMock(async () => jsonResponse({
       ok: true,
