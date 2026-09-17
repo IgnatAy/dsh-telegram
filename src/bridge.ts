@@ -2320,7 +2320,7 @@ export class TelegramBridge {
         void this.enqueue(chat, () => this.onTurnStart(chat))
         chat.progress = new TelegramProgress(this.client, chat.chatId, this.abortController.signal,
           task => this.enqueue(chat, task),
-          error => this.ctx.logger.warn('[telegram] preview failed: %s', messageOf(error)))
+          error => this.ctx.logger.warn('[telegram] preview failed: %s', messageOf(error)), chat.workspace.path)
         break
       case 'assistant/message': {
         chat.progress?.pause()

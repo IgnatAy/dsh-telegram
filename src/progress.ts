@@ -4,6 +4,7 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { TelegramApiError } from './client.js'
 import type { TelegramClientLike } from './client.js'
 import { escapeHtml } from './format.js'
+import { TelegramTranscript } from './transcript.js'
 
 interface ToolProgress {
   id: string
@@ -38,9 +39,7 @@ export class TelegramProgress {
   private phase = '正在思考'
   private tools: ToolProgress[] = []
   private completed = 0
-  private readonly history: { title: string, text: string }[] = []
-  private readonly latestTextEntries = new Set<number>()
-  private latestAnswer = ''
+  private readonly transcript: TelegramTranscript
   private lastPublished = ''
   private paused = false
   private waitingForUser = false
@@ -58,7 +57,9 @@ export class TelegramProgress {
     signal: AbortSignal,
     private readonly enqueue: (task: () => Promise<void>) => Promise<void>,
     private readonly warn: (error: unknown) => void,
+    cwd?: string,
   ) {
+    this.transcript = new TelegramTranscript(cwd)
     this.signal = AbortSignal.any([signal, this.abort.signal])
     this.timer = setInterval(() => this.schedule(), 1200)
     this.schedule()
@@ -93,20 +94,8 @@ export class TelegramProgress {
 
   event(event: SessionEvent): void {
     if (this.disposed) return
-    if (event.type === 'assistant/message') {
-      this.latestTextEntries.clear()
-      this.latestAnswer = ''
-      for (const block of event.data.message.content) {
-        if (block.type === 'reasoning' || block.type === 'text') {
-          if (block.type === 'text') {
-            this.latestTextEntries.add(this.history.length)
-            this.latestAnswer += block.text
-          }
-          this.history.push({ title: block.type === 'reasoning' ? '思考' : '中间输出', text: block.text })
-        }
-      }
-    } else if (event.type === 'tool/call') {
-      this.history.push({ title: `工具调用 · ${event.data.name}`, text: event.data.arguments })
+    this.transcript.event(event)
+    if (event.type === 'tool/call') {
       // Keep active calls plus a bounded recent history.
       this.tools = this.tools.filter((tool, index) => tool.ended === undefined || index >= this.tools.length - 12)
       this.tools.push({ id: event.data.callId, name: clip(event.data.name, 80), started: event.time })
@@ -116,11 +105,6 @@ export class TelegramProgress {
     } else if (event.type === 'tool/result') {
       for (const block of event.data.message.content) {
         if (block.type !== 'tool-result') continue
-        this.history.push({
-          title: `工具结果 · ${this.tools.find(tool => tool.id === block.toolCallId)?.name ?? block.toolCallId}${block.isError ? ' · 失败' : ''}`,
-          text: block.content.map(part => part.type === 'text' || part.type === 'reasoning'
-            ? part.text : `[${part.type}]`).join('\n'),
-        })
         const tool = this.tools.find(tool => tool.id === block.toolCallId && tool.ended === undefined)
         if (tool !== undefined) {
           tool.ended = event.time
@@ -192,24 +176,14 @@ export class TelegramProgress {
 
   /** Include late tool results and reasoning-only turns in the terminal delivery. */
   finishMarkdown(notice?: string): string | undefined {
-    if (this.stoppedByUser || this.history.length === 0) return undefined
+    if (this.stoppedByUser || !this.transcript.hasEntries) return undefined
     const previous = this.lastPublished
-    const result = this.finalMarkdown(notice ?? this.latestAnswer)
+    const result = this.finalMarkdown(notice ?? this.transcript.answer)
     return result === previous ? undefined : result
   }
 
   private processDetails(answer: string): string {
-    const entries = this.history.filter((entry, index) => entry.text !== ''
-      && !(answer === this.latestAnswer && this.latestTextEntries.has(index)))
-    if (entries.length === 0) return this.details()
-    // Treat recorded content as text, so literal HTML/fences cannot escape the
-    // disclosure or consume the final answer. Preserve all text, including newlines.
-    const body = entries.map(entry => {
-      const text = escapeHtml(entry.text)
-      const content = entry.title.startsWith('工具') ? `<pre>${text}</pre>` : `<p>${text.replace(/\n/g, '<br>')}</p>`
-      return `<p><b>${escapeHtml(entry.title)}</b></p>${content}`
-    }).join('')
-    return `<details><summary>思考与运行记录 · 已完成 ${this.completed} 次工具调用</summary>${body}</details>`
+    return this.transcript.render(answer)
   }
 
   private toolLines(): string[] {

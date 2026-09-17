@@ -76,4 +76,4 @@ curl -fsSL https://raw.githubusercontent.com/IgnatAy/dsh-telegram/main/install.s
 
 回复和生成中的预览直接使用 Telegram 原生 `rich_message.markdown`，支持任务清单、LaTeX、表格、脚注、折叠块、高亮、剧透和官方 Rich HTML 扩展。完整语法及媒体、按钮条件见 [输出规则](docs/telegram-output-rules.md)。富消息失败或超限仅记录错误，不回退、不截断最终回复；已移除旧 24,000 字符降级阈值。菜单与提问仍使用自己的普通消息接口。
 
-最终回复会在默认折叠的「思考与运行记录」中保留本轮 dsh 已确认的思考、中间输出、工具参数与文本结果，点击即可展开，最终答案直接显示。记录也计入富消息长度限制；非文本工具结果仅显示类型标记。
+最终回复采用 dsh 的两层折叠：外层标题为「x 次工具调用 · y 条消息」（零项省略，subagent 单独计数），中间消息在第一层直接显示，思考和每次工具的输入/结果在第二层折叠。思考摘要取首行，工具摘要按工具类型及参数生成；失败时显示错误首行。折叠正文保留原生 Markdown 解析，最终答案显示在外层之外。详见 [dsh 折叠规则](docs/dsh-process.md)。

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Match DSH process counts and nested disclosures: intermediate messages at the first level, reasoning and paired tool details at the second. Derive reasoning/tool summaries from content and preserve Rich Markdown inside disclosures.
+
 - Preserve committed DSH reasoning, intermediate replies, tool arguments and textual results in a collapsed final process record. Keep the final answer outside it and retain late results and reasoning-only turns.
 
 - Pass assistant replies and drafts directly as native Rich Markdown, enabling the official task-list, LaTeX, footnote, media, and Rich HTML syntax without a lossy local renderer. Remove rich-to-ordinary fallback and the 24,000-character downgrade; document native limits and integration requirements.

@@ -22,9 +22,7 @@ export declare class TelegramProgress {
     private phase;
     private tools;
     private completed;
-    private readonly history;
-    private readonly latestTextEntries;
-    private latestAnswer;
+    private readonly transcript;
     private lastPublished;
     private paused;
     private waitingForUser;
@@ -35,7 +33,7 @@ export declare class TelegramProgress {
     private dirty;
     private nextSend;
     private lastSent;
-    constructor(client: TelegramClientLike, chatId: number, signal: AbortSignal, enqueue: (task: () => Promise<void>) => Promise<void>, warn: (error: unknown) => void);
+    constructor(client: TelegramClientLike, chatId: number, signal: AbortSignal, enqueue: (task: () => Promise<void>) => Promise<void>, warn: (error: unknown) => void, cwd?: string);
     /** Reject old attempts and revisions, including late chunks after a retry. */
     stream(frame: AssistantStreamFrame): void;
     event(event: SessionEvent): void;
