@@ -144,7 +144,7 @@ export declare class TelegramBridge {
     private applyChatSelection;
     /** Render the current selection shared by menu pages. */
     private formatSelectionSummary;
-    /** Build the default option plus the exact effort ids exposed by the selected model. */
+    /** Offer only the exact effort ids exposed by the selected model. */
     private reasoningChoices;
     /** Build the current numbered workspace/session catalog. */
     private loadCatalog;

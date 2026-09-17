@@ -599,7 +599,8 @@ describe('TelegramBridge', () => {
     expect(panel.text).toContain('# 🎛 控制面板')
     expect(panel.text).toContain('未选择')
     expect(panel.text).toContain('DeepSeek V4 Flash')
-    expect(panel.text).toContain('模型默认：High')
+    expect(panel.text).toContain('**思考强度**：<code>High</code>')
+    expect(panel.text).not.toContain('模型默认')
     expect(panel.text).toContain('现有工作区 / 会话')
     expect(menuButtons(h).buttons.map(button => button.text)).toEqual(expect.arrayContaining(['🗂 工作区与会话', '🤖 切换模型', '🧠 推理强度', '➕ 新建会话', '🗑 删除会话']))
     expect(h.ctx.agents.create).not.toHaveBeenCalled()
@@ -698,9 +699,9 @@ describe('TelegramBridge', () => {
     ] })
     await dispatch(h, update({ text: '/menu' }))
     await clickMenu(h, '推理强度')
-    // Exact label distinguishes the explicit effort from the default choice.
+    // The effective default is checked without adding a separate default option.
     const { panel, buttons } = menuButtons(h)
-    await dispatch(h, callbackUpdate(buttons.find(button => button.text === 'Intense')!.callback_data, 100, panel.messageId))
+    await dispatch(h, callbackUpdate(buttons.find(button => button.text === '✓ Intense')!.callback_data, 100, panel.messageId))
     expect(h.ctx.llm.resolveCallConfig).toHaveBeenLastCalledWith({ provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'intense' }, expect.any(AbortSignal))
     await clickMenu(h, '切换模型')
     await clickMenu(h, 'Other')
