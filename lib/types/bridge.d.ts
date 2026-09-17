@@ -174,6 +174,8 @@ export declare class TelegramBridge {
     private makeSetup;
     /** Attach the channel prompt and question transport for one current chat binding. */
     private attachTelegramBinding;
+    /** Reuse question delivery/lifecycle, but grant only an explicit approval button. */
+    private approveThroughTelegram;
     /** Claim one DSH user-question request for the currently bound Telegram chat. */
     private askThroughTelegram;
     /** Handle one inline-keyboard choice and always dismiss Telegram's callback spinner. */

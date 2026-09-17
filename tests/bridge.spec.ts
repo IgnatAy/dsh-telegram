@@ -594,7 +594,89 @@ function inlineKeyboard(message: Harness['sent'][number]): { inline_keyboard: re
   return markup
 }
 
+type TestApprovalHandler = (request: {
+  agent: FakeAgent; toolName: string; reason?: string; callId?: string; signal?: AbortSignal
+}, next: () => Promise<string>) => Promise<string>
+
+function approvalHandler(handle: FakeHandle): TestApprovalHandler {
+  const handler = handle.agent.handlers.get('approval/request')?.at(-1)
+  if (!handler) throw new Error('approval handler was not installed')
+  return handler as unknown as TestApprovalHandler
+}
+
 describe('TelegramBridge', () => {
+  it.each([['o0', 'allowed-once'], ['o1', 'rejected']])('routes approval choice %s back to DSH', async (action, outcome) => {
+    const h = createHarness()
+    const handle = await selectNew(h)
+    const next = vi.fn(async () => 'unavailable')
+    const decision = approvalHandler(handle)({ agent: handle.agent, toolName: 'bash',
+      callId: 'call-1', reason: '需要写入工作区外 <目录>' }, next)
+    const prompt = await waitFor(() => h.sent[0], 'approval prompt')
+    expect(prompt.text).toContain('权限审批')
+    expect(prompt.text).toContain('call-1')
+    expect(prompt.text).toContain('需要写入工作区外 &lt;目录&gt;')
+    const buttons = inlineKeyboard(prompt).inline_keyboard.flat()
+    expect(buttons.map(button => button.text)).toEqual(['1. 仅允许本次', '2. 拒绝'])
+    const data = buttons.find(button => button.callback_data.endsWith(action))!.callback_data
+    await dispatch(h, callbackUpdate(data, 2, prompt.messageId))
+    await expect(decision).resolves.toBe(outcome)
+    expect(next).not.toHaveBeenCalled()
+    await dispatch(h, callbackUpdate(data, 3, prompt.messageId))
+    expect(h.client.answerCallbackQuery).toHaveBeenLastCalledWith('callback-3', '这个问题已经失效。', undefined, expect.any(AbortSignal))
+  })
+
+  it('does not approve via text, forged actions, other users or stale messages', async () => {
+    const h = createHarness({ allowedUserIds: [42], allowAllUsers: false })
+    const handle = await selectNew(h)
+    const decision = approvalHandler(handle)({ agent: handle.agent, toolName: 'bash' }, async () => 'unavailable')
+    const settled = vi.fn()
+    void decision.then(settled)
+    const prompt = await waitFor(() => h.sent[0], 'approval prompt')
+    const data = inlineKeyboard(prompt).inline_keyboard[0]![0]!.callback_data
+    await dispatch(h, update({ text: '仅允许本次' }))
+    await dispatch(h, callbackUpdate(data.replace(/o0$/, 'u'), 2, prompt.messageId))
+    const foreign = callbackUpdate(data, 3, prompt.messageId)
+    foreign.callback_query!.from.id = 99
+    await dispatch(h, foreign)
+    await dispatch(h, callbackUpdate(data, 4, prompt.messageId + 1))
+    expect(settled).not.toHaveBeenCalled()
+    expect(handle.agent.followup).not.toHaveBeenCalled()
+    await dispatch(h, update({ text: '/cancel' }))
+    await expect(decision).resolves.toBe('cancelled')
+  })
+
+  it.each(['signal', 'stop', 'shutdown', 'switch', 'skip'] as const)('cancels pending approvals on %s', async source => {
+    const h = createHarness()
+    const handle = await selectNew(h)
+    const controller = new AbortController()
+    const decision = approvalHandler(handle)({ agent: handle.agent, toolName: 'bash', signal: controller.signal }, async () => 'unavailable')
+    await waitFor(() => h.sent[0], 'approval prompt')
+    if (source === 'signal') controller.abort()
+    else if (source === 'shutdown') await h.bridge.stop()
+    else if (source === 'switch') await selectNew(h)
+    else if (source === 'skip') await dispatch(h, update({ text: '/skip' }))
+    else await dispatch(h, { update_id: 2, stopped_message_generation: { chat: { id: 7, type: 'private' } } })
+    await expect(decision).resolves.toBe('cancelled')
+    if (source === 'switch') expect(handle.agent.handlers.get('approval/request')).toHaveLength(0)
+  })
+
+  it('fails closed on delivery failure, concurrent requests and already-aborted requests', async () => {
+    const h = createHarness()
+    const handle = await selectNew(h)
+    const approve = approvalHandler(handle)
+    const request = { agent: handle.agent, toolName: 'bash' }
+    vi.mocked(h.client.sendRichMessage).mockRejectedValueOnce(new Error('offline'))
+    await expect(approve(request, async () => 'allowed-once')).resolves.toBe('unavailable')
+    await expect(approve({ ...request, signal: AbortSignal.abort() }, async () => 'allowed-once')).resolves.toBe('cancelled')
+    const pending = approve(request, async () => 'allowed-once')
+    await expect(approve(request, async () => 'allowed-once')).resolves.toBe('unavailable')
+    await dispatch(h, update({ text: '/cancel' }))
+    await expect(pending).resolves.toBe('cancelled')
+    const next = vi.fn(async () => 'rejected')
+    await expect(approve({ ...request, agent: { ...handle.agent } }, next)).resolves.toBe('rejected')
+    expect(next).toHaveBeenCalledOnce()
+  })
+
   it('shows the startup status and keeps menu operations on native rich messages', async () => {
     const h = createHarness()
     await dispatch(h, update({ text: '/menu@my_bot' }))

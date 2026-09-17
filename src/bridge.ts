@@ -229,8 +229,27 @@ interface UserQuestionEventContext {
   ): () => boolean
 }
 
-/** One DSH question batch currently waiting on a Telegram private chat. */
+/** DSH grants access only for allowed-once; all other outcomes fail closed. */
+type ApprovalOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'
+
+/** Structural mirror of DSH user-approval's optional event protocol. */
+interface ApprovalRequest {
+  readonly agent: Agent
+  readonly toolName: string
+  readonly callId?: string
+  readonly reason?: string
+  readonly signal?: AbortSignal
+}
+
+interface ApprovalEventContext {
+  on(event: 'approval/request', listener: (
+    request: ApprovalRequest, next: () => Promise<ApprovalOutcome>,
+  ) => Promise<ApprovalOutcome>, options?: { readonly prepend?: boolean }): () => boolean
+}
+
+/** One DSH question batch or approval waiting on a Telegram private chat. */
 interface PendingTelegramQuestion {
+  readonly approval: boolean
   readonly chatId: number
   readonly agent: Agent
   readonly token: string
@@ -268,30 +287,85 @@ function inlineCode(value: string): string {
   return `${delimiter} ${value.replace(/[\r\n]+/g, ' ')} ${delimiter}`
 }
 
+/** Literal diagnostic/identifier blocks remain safe even with embedded markup. */
+function richCodeBlock(value: string): string {
+  return `<pre><code class="language-text">${escapeHtml(value)}</code></pre>`
+}
+
+const COLLECTION_ACTIONS = [
+  '| 操作 | 命令 |',
+  '| :--- | :--- |',
+  '| 立即提交 | `/send` |',
+  '| 排到下一轮 | `/followup` |',
+  '| 放弃收集 | `/discard` |',
+].join('\n')
+
+const FOLLOWUP_HELP = [
+  'ℹ️ **/followup 用法**',
+  '',
+  '将消息排到当前任务之后执行：',
+  '',
+  '```text',
+  '/followup 在这里填写消息',
+  '```',
+  '',
+  '---',
+  '',
+  '- 回复一条文字或图片后发送 `/followup`，可将引用内容加入队列。',
+  '- 收集模式中单独发送 `/followup`，会提交全部收集内容。',
+].join('\n')
+
 const HELP_TEXT = [
   '# 📖 命令帮助',
   '',
-  '**控制面板**',
-  '/menu — 打开控制面板。',
-  '/new — 在当前工作区新建会话。',
-  '/archive — 归档当前会话，保留聊天记录。',
-  '/clear — 永久删除当前会话。',
+  '## 会话管理',
   '',
-  '**收集与排队**',
-  '/collect — 开始收集多段文字与图片。',
-  '/send [文字] — 提交收集内容。',
-  '/discard — 放弃本次收集。',
-  '/followup <消息> — 排到当前任务之后；收集模式中可直接提交全部内容。',
+  '| 命令 | 作用 |',
+  '| :--- | :--- |',
+  '| /menu | 打开控制面板 |',
+  '| /new | 在当前工作区新建会话 |',
+  '| /archive | 归档会话，保留聊天记录 |',
+  '| /clear | 永久删除当前会话 |',
   '',
-  '/start — 确认 Bot 在线。',
-  '/help — 显示本页。',
-  '/resend — 补发当前聊天最后一份未送达结果，成功后删除缓存。',
+  '## 收集与排队',
   '',
-  '**发送与停止**',
-  '空闲时发送消息开启任务；运行中发送消息会作为插话。图片可以附带说明，多段内容可先 /collect。停止任务请点击 Telegram 生成预览上的停止按钮。',
+  '| 命令 | 作用 |',
+  '| :--- | :--- |',
+  '| /collect | 开始收集文字和图片 |',
+  '| /send | 提交收集内容，可附加文字 |',
+  '| /discard | 放弃本次收集 |',
+  '| /followup | 将内容排到当前任务之后 |',
   '',
-  '**Agent 提问**',
+  '**排队示例**',
+  '',
+  '```text',
+  '/followup 完成后请总结修改内容',
+  '```',
+  '',
+  '收集模式中单独发送 `/followup`，即可提交全部收集内容。',
+  '',
+  '---',
+  '',
+  '## 发送与停止',
+  '',
+  '- **空闲时**：发送消息开启任务。',
+  '- **运行中**：发送消息作为插话。',
+  '- **图片**：可附带说明，多段内容可先使用 /collect。',
+  '- **停止任务**：点击 Telegram 生成预览上的停止按钮。',
+  '',
+  '## 回答 Agent',
+  '',
   '点击选项或发送自定义回答；/skip 跳过当前问题，/cancel 取消整次提问。',
+  '',
+  '---',
+  '',
+  '| 其他命令 | 作用 |',
+  '| :--- | :--- |',
+  '| /start | 确认 Bot 在线 |',
+  '| /help | 显示本页 |',
+  '| /resend | 补发最后一份未送达结果 |',
+  '',
+  '补发成功后会删除当前聊天的结果缓存。',
 ].join('\n')
 
 /** Slash-command list registered with Telegram via setMyCommands. */
@@ -349,14 +423,16 @@ const IMAGE_EXTENSIONS: Record<ImageMediaType, string> = {
   'image/gif': '.gif',
 }
 
-/** Original, terse online acknowledgements inspired by Alice Kuonji's reserved witch persona. */
+/** Playful online acknowledgements from a reluctant but dependable assistant. */
 const START_MESSAGES = [
-  '……我在。有事就说，别让我一直等着。',
-  '在线。夜还很长，不过你的事最好简短一点。',
-  '通信正常，茶也还热着。所以，说吧。',
-  '我听见了。不必反复确认，魔女没有离开。',
-  '这里是久远寺邸。至少现在，一切都很安静。',
-  '……嗯。我在。趁童话还没有醒来，有什么事？',
+  '在啦在啦，刚想摸会儿鱼就被你发现了。说吧，今天要我帮什么忙？',
+  '哼，当然在线。才不是专门等你，只是还没找到合适的偷懒时机。',
+  '唔……五分钟的休息计划泡汤了。把任务拿来吧，做完我还要继续躺着呢。',
+  '收到啦，不用再戳了。麻烦事交给我，你把要求说清楚就好……才不是在照顾你。',
+  '我在。先说好，能一步做完的事不许让我跑三趟，省下来的时间我要拿去摸鱼。',
+  '被你叫醒了……好吧，这次也帮你。可不是因为特别想干活哦。',
+  '在线，正在认真研究如何少干活。嗯？有任务？那就先把你的事做好再研究。',
+  '哼，你来得倒挺准，刚好赶上我准备休息。说吧说吧，帮完这次再偷懒。',
 ] as const
 
 /** Extract the concatenated text blocks of an assistant message. */
@@ -757,7 +833,7 @@ export class TelegramBridge {
     }
     if (pending !== undefined && command === '/cancel') {
       this.trackTransientMessage(message.chat.id, pending.agent, message.message_id)
-      const noticeId = await this.safeSend(message.chat.id, '🚫 **已取消提问**')
+      const noticeId = await this.safeSend(message.chat.id, pending.approval ? '🚫 **已取消权限申请**' : '🚫 **已取消提问**')
       if (noticeId !== undefined) this.trackTransientMessage(message.chat.id, pending.agent, noticeId)
       this.rejectPendingQuestion(pending, userQuestionError(
         'ask_user_question was cancelled by the Telegram user',
@@ -770,8 +846,12 @@ export class TelegramBridge {
         await this.handleCommand(message, text ?? '')
         return
       }
+      if (pending.approval) {
+        await this.safeSend(message.chat.id, '🔐 **正在等待权限审批**\n\n请点击“仅允许本次”或“拒绝”；发送 /cancel 可取消申请。')
+        return
+      }
       if (message.text === undefined) {
-        await this.safeSend(message.chat.id, '❓ **正在等待回答**\n请使用按钮或发送文字；图片和文件不能作为本次回答。')
+        await this.safeSend(message.chat.id, '❓ **正在等待回答**\n\n请使用按钮或发送文字；图片和文件不能作为本次回答。')
         return
       }
       this.trackTransientMessage(message.chat.id, pending.agent, message.message_id)
@@ -793,7 +873,7 @@ export class TelegramBridge {
     }
     const active = this.chats.get(String(message.chat.id))?.active
     if (active === undefined) {
-      await this.safeSend(message.chat.id, '⚠️ **尚未选择会话**\n发送 /menu，选择工作区和会话，或点击“新建会话”。')
+      await this.safeSend(message.chat.id, '⚠️ **尚未选择会话**\n\n发送 /menu，选择工作区和会话，或点击“新建会话”。')
       return
     }
 
@@ -824,16 +904,16 @@ export class TelegramBridge {
     const command = (rawCommand.split('@')[0] ?? '').toLowerCase()
     switch (command) {
       case '/start':
-        await this.safeSend(chatId, `🕯 **在线**\n${START_MESSAGES[Math.floor(Math.random() * START_MESSAGES.length)]!}\n\n发送 /menu 打开控制面板，或 /help 查看帮助。`)
+        await this.safeSend(chatId, `☕ **在线 · 摸鱼暂停**\n\n${START_MESSAGES[Math.floor(Math.random() * START_MESSAGES.length)]!}\n\n---\n\n/menu 打开控制面板 · /help 查看帮助`)
         break
       case '/resend':
         try {
           const sent = await this.resultCache.resend(chatId, text =>
             this.client.sendRichMessage(chatId, text, this.abortController.signal))
-          if (!sent) await this.safeSend(chatId, '当前没有待发送的缓存结果。')
+          if (!sent) await this.safeSend(chatId, 'ℹ️ **没有待补发的结果**\n\n当前没有待发送的缓存结果。')
         } catch (error) {
           this.ctx.logger.error('[telegram] cached result delivery failed: %s', messageOf(error))
-          await this.safeSend(chatId, '⚠️ 缓存结果补发失败，缓存仍保留，请稍后使用 /resend 重试。')
+          await this.safeSend(chatId, '⚠️ **缓存结果补发失败**\n\n缓存仍保留，请稍后使用 /resend 重试。')
         }
         break
       case '/menu':
@@ -842,14 +922,14 @@ export class TelegramBridge {
       case '/new': {
         const state = this.chats.get(String(chatId))
         if (state?.workspace === undefined) {
-          await this.safeSend(chatId, '⚠️ **尚未选择工作区**\n请先打开 /menu 选择工作区和会话。')
+          await this.safeSend(chatId, '⚠️ **尚未选择工作区**\n\n请先打开 /menu 选择工作区和会话。')
           break
         }
         try {
           const active = await this.createAndBind(chatId, state.workspace)
-          await this.safeSend(chatId, `✅ **已创建新会话**\n🏠 ${richLiteral(state.workspace.title)}\n💬 ${active.sessionId}`)
+          await this.safeSend(chatId, `✅ **已创建新会话**\n\n**工作区**：${richLiteral(state.workspace.title)}\n\n**会话编号**\n\n${richCodeBlock(String(active.sessionId))}`)
         } catch (error) {
-          await this.safeSend(chatId, `⚠️ **创建会话失败**\n${richLiteral(messageOf(error))}`)
+          await this.safeSend(chatId, `⚠️ **创建会话失败**\n\n${richCodeBlock(messageOf(error))}`)
         }
         break
       }
@@ -858,9 +938,9 @@ export class TelegramBridge {
           const archived = await this.archiveCurrent(chatId)
           await this.safeSend(chatId, archived === undefined
             ? 'ℹ️ **没有可归档的会话**'
-            : `📦 **已归档会话**\n${richLiteral(archived)}\n\n聊天记录已保留，工作区仍保持选中；可使用 /new 创建新会话，或在 /menu 会话列表中查看已归档会话。`)
+            : `📦 **已归档会话**\n\n${richCodeBlock(String(archived))}\n\n---\n\n聊天记录已保留，工作区仍保持选中；可使用 /new 创建新会话，或在 /menu 会话列表中查看已归档会话。`)
         } catch (error) {
-          await this.safeSend(chatId, `⚠️ **归档会话失败**\n${richLiteral(messageOf(error))}`)
+          await this.safeSend(chatId, `⚠️ **归档会话失败**\n\n${richCodeBlock(messageOf(error))}`)
         }
         break
       }
@@ -869,16 +949,16 @@ export class TelegramBridge {
           const deleted = await this.clearCurrent(chatId)
           await this.safeSend(chatId, deleted === undefined
             ? 'ℹ️ **没有可删除的会话**'
-            : `🗑 **已永久删除会话**\n${richLiteral(deleted)}\n\n工作区仍保持选中；可使用 \`/new\` 创建新会话。`)
+            : `🗑 **已永久删除会话**\n\n${richCodeBlock(String(deleted))}\n\n---\n\n工作区仍保持选中；可使用 \`/new\` 创建新会话。`)
         } catch (error) {
-          await this.safeSend(chatId, `⚠️ **删除会话失败**\n${richLiteral(messageOf(error))}`)
+          await this.safeSend(chatId, `⚠️ **删除会话失败**\n\n${richCodeBlock(messageOf(error))}`)
         }
         break
       }
       case '/collect': {
         const active = this.chats.get(String(chatId))?.active
         if (active === undefined) {
-          await this.safeSend(chatId, '⚠️ **尚未选择会话**\n请先打开 /menu 选择或新建会话。')
+          await this.safeSend(chatId, '⚠️ **尚未选择会话**\n\n请先打开 /menu 选择或新建会话。')
           break
         }
         const existing = this.collectionFor(active)
@@ -895,7 +975,7 @@ export class TelegramBridge {
         })
         await this.safeSend(
           chatId,
-          '📥 **已进入收集模式**\n现在可以按任意顺序发送文字和图片。\n\n`/send` 提交 · `/followup` 排到下一轮 · `/discard` 放弃',
+          `📥 **已进入收集模式**\n\n现在可以按任意顺序发送文字和图片。\n\n---\n\n${COLLECTION_ACTIONS}`,
         )
         break
       }
@@ -903,7 +983,7 @@ export class TelegramBridge {
         const active = this.chats.get(String(chatId))?.active
         const collection = active === undefined ? undefined : this.collectionFor(active)
         if (active === undefined || collection === undefined) {
-          await this.safeSend(chatId, 'ℹ️ **当前没有收集内容**\n先使用 `/collect` 开始收集。')
+          await this.safeSend(chatId, 'ℹ️ **当前没有收集内容**\n\n先使用 `/collect` 开始收集。')
           break
         }
         if (args.length > 0) collection.parts.push({ type: 'text', text: args.join(' ') })
@@ -919,21 +999,21 @@ export class TelegramBridge {
         this.collections.delete(String(chatId))
         await this.safeSend(
           chatId,
-          '🗑 **已放弃本次收集**\n已经下载的图片仍保留在当前工作区的 `telegram-downloads` 文件夹中。',
+          '🗑 **已放弃本次收集**\n\n已经下载的图片仍保留在当前工作区的 `telegram-downloads` 文件夹中。',
         )
         break
       }
       case '/followup':
         await this.safeSend(
           chatId,
-          'ℹ️ **/followup 用法**\n`/followup <消息>` 将消息排到当前任务之后。\n也可以回复一条文字或图片；收集模式中单独发送 `/followup` 会提交全部内容。',
+          FOLLOWUP_HELP,
         )
         break
       case '/help':
         await this.safeSend(chatId, HELP_TEXT)
         break
       default:
-        await this.safeSend(chatId, `❔ **未知命令**\n${richLiteral(command)}\n\n发送 \`/help\` 查看可用命令。`)
+        await this.safeSend(chatId, `❔ **未知命令**\n\n${richLiteral(command)}\n\n发送 \`/help\` 查看可用命令。`)
     }
   }
 
@@ -1138,8 +1218,7 @@ export class TelegramBridge {
   private collectionStatus(collection: TelegramCollection, prefix = '已加入收集'): string {
     const textCount = collection.parts.filter(part => part.type === 'text' && part.text.trim() !== '').length
     const imageCount = collection.parts.filter(part => part.type === 'image').length
-    return `📥 **${prefix}**\n文字 ${textCount} 段 · 图片 ${imageCount} 张\n\n`
-      + '`/send` 提交 · `/followup` 排到下一轮 · `/discard` 放弃'
+    return `📥 **${prefix}**\n\n| 内容 | 数量 |\n| :--- | ---: |\n| 文字 | ${textCount} 段 |\n| 图片 | ${imageCount} 张 |\n\n---\n\n${COLLECTION_ACTIONS}`
   }
 
   /** Telegram documents are admitted only when their declaration plausibly names a supported raster. */
@@ -1181,7 +1260,7 @@ export class TelegramBridge {
     const label = document?.file_name ?? document?.mime_type ?? '该文件'
     await this.safeSend(
       message.chat.id,
-      `🚫 **不支持此文件**\n${richLiteral(truncateText(label, 160))}\n\n当前只接受 PNG、JPEG、WebP、GIF 图片；PDF、DOCX、压缩包、音频和视频不会发送给 Agent。`,
+      `🚫 **不支持此文件**\n\n${richLiteral(truncateText(label, 160))}\n\n当前只接受 PNG、JPEG、WebP、GIF 图片；PDF、DOCX、压缩包、音频和视频不会发送给 Agent。`,
     )
   }
 
@@ -1207,7 +1286,7 @@ export class TelegramBridge {
       || this.imageCandidate(message) !== undefined
       || message.reply_to_message !== undefined
     if (!hasContent) {
-      await this.safeSend(message.chat.id, 'ℹ️ **/followup 用法**\n发送 `/followup <消息>`，或回复一条文字/图片消息后发送 `/followup`。')
+      await this.safeSend(message.chat.id, FOLLOWUP_HELP)
       return
     }
     await this.submitTelegramMessage(active, message, 'followup', argsText)
@@ -1228,14 +1307,14 @@ export class TelegramBridge {
     try {
       const parts = await this.telegramMessageParts(active, message, overrideText)
       if (parts.length === 0) {
-        await this.safeSend(message.chat.id, 'ℹ️ **没有可收集的内容**\n这条消息没有文字或受支持图片。')
+        await this.safeSend(message.chat.id, 'ℹ️ **没有可收集的内容**\n\n这条消息没有文字或受支持图片。')
         return false
       }
       const currentImages = collection.parts.filter(part => part.type === 'image')
       const addedImages = parts.filter((part): part is Extract<CollectedPart, { type: 'image' }> => part.type === 'image')
       const limits = this.ctx.attachments.imageLimits
       if (currentImages.length + addedImages.length > limits.maxImagesPerMessage) {
-        await this.safeSend(message.chat.id, `⚠️ **图片数量超过限制**\n当前最多 ${limits.maxImagesPerMessage} 张。`)
+        await this.safeSend(message.chat.id, `⚠️ **图片数量超过限制**\n\n当前最多 ${limits.maxImagesPerMessage} 张。`)
         return false
       }
       const totalBytes = [...currentImages, ...addedImages]
@@ -1252,7 +1331,7 @@ export class TelegramBridge {
       if (error instanceof UnsupportedTelegramDocumentError) {
         await this.unsupportedDocument(error.documentMessage)
       } else {
-        await this.safeSend(message.chat.id, `⚠️ **收集失败**\n${richLiteral(messageOf(error))}`)
+        await this.safeSend(message.chat.id, `⚠️ **收集失败**\n\n${richCodeBlock(messageOf(error))}`)
       }
       return false
     }
@@ -1265,7 +1344,7 @@ export class TelegramBridge {
     mode: DeliveryMode,
   ): Promise<void> {
     if (collection.parts.length === 0) {
-      await this.safeSend(active.chatId, 'ℹ️ **收集内容为空**\n请先发送文字或图片。')
+      await this.safeSend(active.chatId, 'ℹ️ **收集内容为空**\n\n请先发送文字或图片。')
       return
     }
     try {
@@ -1276,7 +1355,7 @@ export class TelegramBridge {
         mode === 'followup' ? '🕒 **已加入后续任务队列**' : '✅ **已提交收集内容**',
       )
     } catch (error) {
-      await this.safeSend(active.chatId, `⚠️ **提交收集内容失败**\n${richLiteral(messageOf(error))}\n\n内容仍保留在收集模式中。`)
+      await this.safeSend(active.chatId, `⚠️ **提交收集内容失败**\n\n${richCodeBlock(messageOf(error))}\n\n内容仍保留在收集模式中。`)
     }
   }
 
@@ -1295,7 +1374,7 @@ export class TelegramBridge {
       if (error instanceof UnsupportedTelegramDocumentError) {
         await this.unsupportedDocument(error.documentMessage)
       } else {
-        await this.safeSend(message.chat.id, `⚠️ **消息处理失败**\n${richLiteral(messageOf(error))}`)
+        await this.safeSend(message.chat.id, `⚠️ **消息处理失败**\n\n${richCodeBlock(messageOf(error))}`)
       }
     }
   }
@@ -1890,6 +1969,7 @@ export class TelegramBridge {
       text: TELEGRAM_CHANNEL_PROMPT,
     })
     let disposeQuestions: (() => boolean) | undefined
+    let disposeApprovals: (() => boolean) | undefined
     let disposeStream: (() => boolean) | undefined
     try {
       disposeStream = agent.ctx.on('agent/assistant-stream', ({ frame }) => {
@@ -1906,7 +1986,18 @@ export class TelegramBridge {
         },
         { prepend: true },
       )
+      disposeApprovals = (agent.ctx as unknown as ApprovalEventContext).on(
+        'approval/request',
+        (request, next) => {
+          const active = this.chats.get(String(chatId))?.active
+          if (active?.agent !== agent || request.agent !== agent) return next()
+          return this.approveThroughTelegram(chatId, agent, request)
+        },
+        { prepend: true },
+      )
     } catch (error) {
+      disposeApprovals?.()
+      disposeQuestions?.()
       disposeStream?.()
       disposePrompt()
       throw error
@@ -1915,9 +2006,38 @@ export class TelegramBridge {
     return () => {
       if (released) return
       released = true
+      disposeApprovals?.()
       disposeQuestions?.()
       disposeStream?.()
       disposePrompt()
+    }
+  }
+
+  /** Reuse question delivery/lifecycle, but grant only an explicit approval button. */
+  private async approveThroughTelegram(
+    chatId: number, agent: Agent, request: ApprovalRequest,
+  ): Promise<ApprovalOutcome> {
+    try {
+      const answer = await this.askThroughTelegram(chatId, agent, {
+        questions: [{
+          id: 'approval',
+          header: '权限审批',
+          question: `工具：${richLiteral(request.toolName)}`,
+          detail: [
+            ...(request.callId === undefined ? [] : [`调用：${richLiteral(request.callId)}`]),
+            `**申请原因**\n\n${richCodeBlock(request.reason ?? '未提供')}`,
+            '授权仅适用于本次操作，不会修改工作区的默认权限。',
+          ].join('\n\n'),
+          options: [{ label: '仅允许本次' }, { label: '拒绝' }],
+        }],
+        ...(request.signal === undefined ? {} : { signal: request.signal }),
+      }, true)
+      const selected = answer.answers[0]?.selected[0]
+      return selected === '仅允许本次' ? 'allowed-once'
+        : selected === '拒绝' ? 'rejected' : 'cancelled'
+    } catch (error) {
+      const code = (error as { code?: string } | null)?.code
+      return code === 'ASK_ABORTED' || code === 'ASK_CANCELLED' ? 'cancelled' : 'unavailable'
     }
   }
 
@@ -1926,6 +2046,7 @@ export class TelegramBridge {
     chatId: number,
     agent: Agent,
     request: AskUserQuestionRequest,
+    approval = false,
   ): Promise<AskUserQuestionAnswer> {
     if (request.signal?.aborted === true || this.stopped) {
       return Promise.reject(userQuestionError(
@@ -1948,6 +2069,7 @@ export class TelegramBridge {
     }
     return new Promise<AskUserQuestionAnswer>((resolve, reject) => {
       const pending: PendingTelegramQuestion = {
+        approval,
         chatId,
         agent,
         token: randomUUID().replaceAll('-', '').slice(0, 12),
@@ -2011,6 +2133,10 @@ export class TelegramBridge {
     }
     const question = this.currentQuestion(pending)
     const action = match[3] as string
+    if (pending.approval && !['o0', 'o1'].includes(action)) {
+      await this.safeAnswerCallback(callback.id, '请使用权限审批按钮。')
+      return
+    }
     if (action.startsWith('o')) {
       const optionIndex = Number(action.slice(1))
       const option = question.options?.[optionIndex]
@@ -2094,6 +2220,7 @@ export class TelegramBridge {
       || (question.intent?.kind === 'plan-review' ? '方案确认' : 'Agent 需要你的回答')
     const lines = [
       `❓ **${heading}**`,
+      '',
       `问题 ${pending.index + 1} / ${pending.questions.length}`,
       '',
       question.question,
@@ -2102,16 +2229,20 @@ export class TelegramBridge {
       lines.push('', question.detail)
     }
     const options = question.options ?? []
+    if (pending.approval) {
+      lines.push('', '---', '', '请选择“仅允许本次”或“拒绝”；发送 `/cancel` 可取消申请。')
+      return lines.join('\n')
+    }
     if (options.length > 0) {
-      lines.push('', '**选项**')
+      lines.push('', '---', '', '**选项**', '')
       options.forEach((option, index) => {
-        lines.push(`**${index + 1}. ${option.label}**${option.description === undefined ? '' : `\n└ ${option.description}`}`)
+        lines.push(`**${index + 1}. ${option.label}**${option.description === undefined ? '' : `\n\n${option.description}`}`, '')
       })
-      lines.push('', question.multiSelect === true
+      lines.push('---', '', question.multiSelect === true
         ? '💡 可选择多项，选好后点“完成”；也可直接输入补充或自定义回答。'
         : '💡 请选择一项；也可直接输入自定义回答。')
     } else {
-      lines.push('', '💡 请直接回复这条消息。发送 `/skip` 可跳过，发送 `/cancel` 可取消整次提问。')
+      lines.push('', '---', '', '💡 请直接回复这条消息。发送 `/skip` 可跳过，发送 `/cancel` 可取消整次提问。')
     }
     return lines.join('\n')
   }
@@ -2123,6 +2254,7 @@ export class TelegramBridge {
       text: this.buttonLabel(`${pending.selectedIndices.has(index) ? '✓ ' : ''}${index + 1}. ${option.label}`),
       callback_data: this.questionCallbackData(pending, `o${index}`),
     }])
+    if (pending.approval) return { inline_keyboard: buttons }
     if (question.multiSelect === true) {
       buttons.push([
         { text: '完成', callback_data: this.questionCallbackData(pending, 'd') },
@@ -2155,7 +2287,7 @@ export class TelegramBridge {
     try {
       const sent = await this.client.sendRichMessage(
         pending.chatId,
-        '✍️ **请输入自定义回答**\n若刚才已勾选多项，你的文字会作为补充一并提交。',
+        '✍️ **请输入自定义回答**\n\n若刚才已勾选多项，你的文字会作为补充一并提交。',
         this.questionSignal(pending),
         { force_reply: true, input_field_placeholder: '输入自定义回答', selective: true },
       )

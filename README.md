@@ -4,6 +4,8 @@
 
 A Telegram bot plugin for DeepSeek Harness. Chat with agents, switch workspaces and sessions, send images, and answer agent questions from Telegram. Uses long polling and shares sessions with the Web UI.
 
+Permission requests, including sandbox escalation, appear in the bound Telegram chat with the tool, call ID and reason, plus Allow once / Reject buttons. Only the explicit allow button grants permission; free text never grants it. `/cancel`, `/skip`, native Stop and session switching cancel the request. Delivery failures return unavailable without granting access.
+
 Developed against **DeepSeek Harness v0.1.5-rc.2**.
 
 ## Install and start

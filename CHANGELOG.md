@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Route DSH `approval/request` to Telegram through the existing question lifecycle, with explicit one-shot allow/reject buttons, cancellation cleanup and fail-closed delivery errors.
+
 - Cache the latest unsent complete output per bot/chat on disk; delete it on confirmed delivery and add `/resend` to recover it after outages or restarts without a menu entry.
 
 - Add `/menu` with status, paginated workspace/session/model catalogs, reasoning selection, session creation, and confirmed deletion. Bind callback actions to stable IDs and current selections; reject stale or repeated actions.
