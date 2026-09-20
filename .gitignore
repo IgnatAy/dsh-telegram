@@ -1,4 +1,5 @@
 node_modules/
+AGENTS.md
 .pnpm-store/
 .DS_Store
 *Zone.Identifier

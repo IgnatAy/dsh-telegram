@@ -1,1 +1,0 @@
-这个文件夹是我对wsl2上的deepseek harness做的一个Telegram机器人插件，/Users/ignat/Developer/deepseek-harness-dsh-v0.1.5-rc.2路径下是dsh的源码
