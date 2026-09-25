@@ -35,6 +35,24 @@ function chunk(p: TelegramProgress, text: string, revision: number, attemptId = 
 }
 
 describe('TelegramProgress', () => {
+  it('separates committed messages and formats an unfinished streaming code block', async () => {
+    const { p, client, drain } = setup()
+    for (const text of ['**检查项目**\n\n- 配置正常', '```sh\npnpm test']) {
+      p.event({ type: 'assistant/message', data: {
+        message: { content: [{ type: 'text', text }] },
+      } } as SessionEvent)
+    }
+    start(p)
+    chunk(p, '```ts\nconst ok = true', 2)
+    await drain()
+    const preview = String(client.sendRichMessageDraft.mock.calls.at(-1)?.[2])
+    expect(preview).toContain('### 处理进展\n\n**检查项目**\n\n- 配置正常\n\n---\n\n```sh\npnpm test\n```')
+    expect(preview).toContain('\n\n---\n\n### 正在生成\n\n```ts\nconst ok = true\n```')
+    chunk(p, '\n```\n\n完成', 3)
+    await vi.advanceTimersByTimeAsync(1200)
+    expect(client.sendRichMessageDraft.mock.calls.at(-1)?.[2]).toContain('```ts\nconst ok = true\n```\n\n完成')
+  })
+
   it('retains committed text through tool status, heartbeat, new steps and retries without duplication', async () => {
     const { p, client, drain } = setup()
     start(p)

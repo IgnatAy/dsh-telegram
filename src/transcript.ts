@@ -81,10 +81,9 @@ export class TelegramTranscript {
       && (final === undefined || message.step < final.step))
     if (!this.tools && !intermediate.length) return ''
     const summary = `${this.tools} 次工具调用 · ${intermediate.length} 条消息`
-    // Number whole messages, not individual content blocks. Keep Markdown at
-    // the top level inside details so tables, formulas and code remain native.
-    const body = intermediate.map((message, index) =>
-      `**消息 ${index + 1}**\n\n${richBody(message.text)}`).join('\n\n---\n\n')
+    // Keep Markdown at the top level inside details so tables, formulas and
+    // code remain native; separators distinguish messages without extra labels.
+    const body = intermediate.map(message => richBody(message.text)).join('\n\n---\n\n')
     return `<details><summary>${escapeHtml(summary)}</summary>\n\n${body || '暂无中间消息。'}\n\n</details>`
   }
 }

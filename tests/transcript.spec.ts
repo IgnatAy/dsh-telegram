@@ -18,7 +18,7 @@ function result(t: TelegramTranscript, id: string, text: string, isError = false
 }
 
 describe('DSH process disclosure projection', () => {
-  it('shows only numbered intermediate messages with rich formatting and call counts', () => {
+  it('shows intermediate messages with rich formatting and call counts without numbered labels', () => {
     const t = new TelegramTranscript()
     assistant(t, 1, ['**检查中**', '\n\n| A | B |\n|---|---|\n| 1 | 2 |'], '私有思考')
     call(t, 'bash', { description: '运行测试', command: 'pnpm test' })
@@ -27,8 +27,9 @@ describe('DSH process disclosure projection', () => {
     assistant(t, 3, ['最终正文'], '最终思考')
     const text = t.render('最终正文')
     expect(text).toContain('<summary>1 次工具调用 · 2 条消息</summary>')
-    expect(text).toContain('**消息 1**\n\n**检查中**\n\n| A | B |')
-    expect(text).toContain('\n\n---\n\n**消息 2**\n\n第二条消息')
+    expect(text).toContain('**检查中**\n\n| A | B |')
+    expect(text).toContain('\n\n---\n\n第二条消息')
+    expect(text).not.toMatch(/\*\*消息\s*\d+\*\*/)
     for (const hidden of ['私有思考', '最终思考', '运行测试', 'pnpm test', '工具结果', '最终正文']) {
       expect(text).not.toContain(hidden)
     }
@@ -65,7 +66,7 @@ describe('DSH process disclosure projection', () => {
     assistant(t, 2, ['<details><summary>附注</summary>\n\n内容'])
     assistant(t, 3, ['最终正文'])
     const text = t.render('最终正文')
-    expect(text).toContain('const x = 1\n```\n\n---\n\n**消息 2**')
+    expect(text).toContain('const x = 1\n```\n\n---\n\n<details>')
     expect(text).toContain('内容\n\n</details>\n\n</details>')
   })
 
