@@ -47,8 +47,8 @@ describe('TelegramProgress', () => {
     const result = p.finalMessages('**最终答案**').join('\n\n')
     expect(result).toContain('先检查 &lt;details&gt; &amp; 状态')
     expect(result).toContain('正在检查')
-    expect(result).toContain('```json\n{\n  \"path\": \"a.ts\"\n}\n```')
-    expect(result).toContain('<summary>读取 · 文件不存在</summary>')
+    expect(result).not.toContain('```json\n{\n  \"path\": \"a.ts\"\n}\n```')
+    expect(result).toContain('读取 · 文件不存在')
     expect(result).toContain('文件不存在')
     expect(result).toContain('整理结果')
     expect(result.match(/最终答案/g)).toHaveLength(1)
@@ -94,7 +94,7 @@ describe('TelegramProgress', () => {
     p.event({ type: 'tool/result', time: 101000, data: { message: { content: [
       { type: 'tool-result', toolCallId: 'a', content: [{ type: 'text', text: '迟到的结果' }] },
     ] } } } as SessionEvent)
-    expect(p.finishMessages('任务已完成')?.join('\n\n')).toContain('迟到的结果')
+    expect(p.finishMessages('任务已完成')?.join('\n\n')).toContain('工具调用 · a')
     p.stopByUser()
     expect(p.finishMessages('任务已完成')?.join('\n\n')).toBeUndefined()
   })
@@ -153,7 +153,7 @@ describe('TelegramProgress', () => {
     for (const [, source] of richExamples) expect(p.finalMessages(source)[1]).toBe(source)
   })
 
-  it('separates a large nested process log from the following short answer', () => {
+  it('omits large tool output while keeping the process summary and separate answer', () => {
     const { p } = setup()
     const log = '详细工具输出\n'.repeat(2000)
     p.event({ type: 'tool/call', time: 100000, data: { callId: 'a', name: 'read', arguments: '{}' } } as SessionEvent)
@@ -166,7 +166,9 @@ describe('TelegramProgress', () => {
     const result = p.finalMessages('这是最终正文。').join('\n\n')
     expect(p.finalMessages('这是最终正文。')[1]).toBe('这是最终正文。')
     expect(p.finalMessages('这是最终正文。')[0]).toMatch(/^<details>/)
-    expect(result).toContain(log)
+    expect(result).not.toContain(log)
+    expect(result).toContain('读取')
+    expect(result.match(/<details>/g)).toHaveLength(1)
     expect(result.match(/这是最终正文。/g)).toHaveLength(1)
     expect(p.finishMessages()).toBeUndefined()
   })
@@ -241,7 +243,7 @@ describe('TelegramProgress', () => {
     ] } } } as SessionEvent)
     const final = p.finalMessages('完成').join('\n\n')
     expect(final).toContain('<details>')
-    expect(final).toContain('<summary>工具调用 · secret result</summary>')
+    expect(final).toContain('工具调用 · secret result')
     expect(final).toContain('secret result')
   })
 

@@ -23,10 +23,10 @@
 - 地图使用 <tg-map lat="纬度" long="经度" zoom="缩放级别"/>，只填有依据的坐标。自定义表情用 <tg-emoji emoji-id="真实ID">替代文字</tg-emoji>，日期时间用 <tg-time unix="真实Unix秒数" format="wDT">替代文字</tg-time>，也支持官方 tg://emoji 与 tg://time 语法。
 - 原生按钮用 <tg-button>，按钮行用 <tg-button-row align="left|center|right">。可使用 type="url" 搭配 url、type="copy_text" 搭配 text，或 type="disabled"；样式为 primary、success、danger、link。不要用按钮代替普通正文链接。
 - callback_data、web_app、login_url、switch_inline_query、switch_inline_query_current_chat、switch_inline_query_chosen_chat 按钮语法会原样传给 Telegram，但需要真实应用、域名或后端处理。当前插件只处理自己的菜单和提问按钮；不要生成自定义业务回调或承诺点击能执行工具。需要用户回答时使用已有 ask_user_question 工具。
-- <tg-thinking> 仅用于生成中的草稿，由插件负责插入状态；不要在最终答案中输出这个标签。插件会将 dsh 已提供的思考、工具调用与结果、中间输出放入折叠记录，无需在正文重复。
+- <tg-thinking> 仅用于生成中的草稿，由插件负责插入状态；不要在最终答案中输出这个标签。插件会将 dsh 已提供的思考摘要、工具调用摘要和中间输出放入外层折叠记录，不包含完整思考、工具输入和结果详情；无需在正文重复过程记录。
 - 富消息上限为 32768 个 UTF-8 字符、500 个块（含嵌套列表项及表格行）、16 层嵌套、50 个媒体、20 列表格。每条回复正文尽量少于 30000 字符，为插件运行记录留空间；超长内容应组织为精简回复和用户要求的文件。插件不截断最终答案、不转普通文本、不拆坏公式或脚注；超限或不支持的服务会明确记入发送失败日志。
 
-最终结果的折叠记录来自本轮已确认的 `assistant/message`、`tool/call` 和 `tool/result` 事件。外层标题按 dsh 统计调用和中间消息，第一层直接显示中间正文，第二层分别折叠思考和每次工具的输入/结果。思考摘要采用首行去掉 `**`；工具摘要采用 dsh 工具类型和参数规则，结果合并回同一调用。折叠正文直接使用 Rich Markdown，JSON/程序参数使用代码块，非文本结果使用 JSON 代码块；不自动上传附件。插件仅转义摘要并隔离正文中未配对的 details 标签及未闭合围栏，不把整段正文转换成纯文本。草稿仍显示简短状态与最近工具摘要。记录同样计入 Telegram 富消息长度限制，超限记入发送失败日志，不静默截断。详见 [dsh 折叠规则](dsh-process.md)。
+最终结果的折叠记录来自本轮已确认的 `assistant/message`、`tool/call` 和 `tool/result` 事件。外层标题按 dsh 统计调用和中间消息，展开后直接显示中间正文、思考摘要和工具摘要，不再生成内层折叠，也不发送完整思考、工具输入、结果及差异详情。思考摘要采用首行去掉 `**`；工具摘要采用 dsh 工具类型和参数规则，结果合并回同一调用。中间正文保留 Rich Markdown；完整过程仍可在 DSH 历史中查看，不自动上传附件。插件仅转义摘要并隔离正文中未配对的 details 标签及未闭合围栏，不把整段正文转换成纯文本。草稿仍显示简短状态与最近工具摘要。记录同样计入 Telegram 富消息长度限制，超限记入发送失败日志，不静默截断。详见 [dsh 折叠规则](dsh-process.md)。
 
 ## 结果重发
 

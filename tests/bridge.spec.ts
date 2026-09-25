@@ -2041,7 +2041,7 @@ describe('TelegramBridge', () => {
     expect(h.sent[4]?.text).toBe(finalChunks[1]?.text)
   })
 
-  it('delivers a reasoning-only turn with late tool output inside the final disclosure', async () => {
+  it('delivers a reasoning-only turn with late tool summaries and no result body', async () => {
     const h = createHarness()
     h.bridge.start()
     await waitFor(() => h.polls.length > 0 ? true : undefined, 'polling')
@@ -2057,7 +2057,8 @@ describe('TelegramBridge', () => {
     h.emit(sessionId, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } } as SessionEvent)
     const final = await waitFor(() => h.sent.find(message => message.text.includes('检查结果')), 'folded reasoning')
     expect(final.text).toContain('<details>')
-    expect(final.text).toContain('已执行')
+    expect(final.text).toContain('工具调用 · a')
+    expect(final.text).not.toContain('已执行')
   })
 
   it('ignores non-delivery event kinds on known sessions', async () => {

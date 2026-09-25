@@ -28,7 +28,7 @@ describe('DSH process disclosure projection', () => {
     expect(text).not.toMatch(/<\/summary>\s*<\/details>/)
   })
 
-  it('puts messages at depth one and reasoning/paired tools at depth two', () => {
+  it('keeps intermediate messages and summaries in one disclosure without inner detail bodies', () => {
     const t = new TelegramTranscript()
     assistant(t, 1, ['**检查中**', '\n\n| A | B |\n|---|---|\n| 1 | 2 |'], '**检查计划**\n\n- 检查文件')
     call(t, 'bash', { description: '运行测试', command: 'pnpm test' })
@@ -36,16 +36,17 @@ describe('DSH process disclosure projection', () => {
     assistant(t, 2, ['完成'], '**整理结果**\n\n$x^2$')
     const text = t.render('完成')
     expect(text).toMatch(/^<details><summary>1 次工具调用 · 1 条消息<\/summary>/)
-    expect(text).toContain('<summary>思考 · 检查计划</summary>\n\n**检查计划**')
-    expect(text).toContain('</details>\n\n**检查中**')
+    expect(text).toContain('思考 · 检查计划')
+    expect(text).toContain('思考 · 检查计划\n\n**检查中**')
     expect(text).toContain('| A | B |')
-    expect(text).toContain('<summary>Bash · 运行测试</summary>')
-    expect(text).toContain('```bash\npnpm test\n```')
-    expect(text).toContain('**输出**\n\n**全部通过**')
-    expect(text).toContain('$x^2$')
+    expect(text).toContain('Bash · 运行测试')
+    expect(text).not.toContain('```bash\npnpm test\n```')
+    expect(text).not.toContain('**输出**\n\n**全部通过**')
+    expect(text).not.toContain('$x^2$')
+    expect(text).not.toContain('- 检查文件')
     expect(text).not.toContain('完成')
-    expect(text.match(/<details>/g)).toHaveLength(4)
-    expect(text.match(/<\/details>/g)).toHaveLength(4)
+    expect(text.match(/<details>/g)).toHaveLength(1)
+    expect(text.match(/<\/details>/g)).toHaveLength(1)
   })
 
   it('counts messages, not blocks or reasoning, and excludes every message in the final step', () => {
@@ -69,8 +70,9 @@ describe('DSH process disclosure projection', () => {
     result(t, 'a', 'A 结果')
     const text = t.render('完成')
     expect(text).toContain('<summary>2 次工具调用 · 1 个 subagent</summary>')
-    expect(text.indexOf('A 结果')).toBeLessThan(text.indexOf('读取 · b.ts'))
-    expect(text).toContain('B 结果')
+    expect(text.indexOf('读取 · a.ts')).toBeLessThan(text.indexOf('读取 · b.ts'))
+    expect(text).not.toContain('A 结果')
+    expect(text).not.toContain('B 结果')
   })
 
   it.each([
@@ -84,25 +86,25 @@ describe('DSH process disclosure projection', () => {
   ])('matches native row title and argument summary for %s', (name, args, title) => {
     const t = new TelegramTranscript('/work', '/home/user')
     call(t, String(name), args)
-    expect(t.render('完成')).toContain(`<summary>${title}</summary>`)
+    expect(t.render('完成')).toContain(title)
   })
 
   it('replaces a failed tool summary with the error first line', () => {
     const t = new TelegramTranscript()
     call(t, 'read', { file_path: 'a.ts' })
     result(t, 'read', '文件不存在\n**请检查路径**', true)
-    expect(t.render('完成')).toContain('<summary>读取 · 文件不存在</summary>')
-    expect(t.render('完成')).toContain('**请检查路径**')
+    expect(t.render('完成')).toContain('读取 · 文件不存在')
+    expect(t.render('完成')).not.toContain('**请检查路径**')
   })
 
-  it('uses applied diff metadata for native change counts and a rich diff body', () => {
+  it('keeps native change counts without the diff body', () => {
     const t = new TelegramTranscript('/work')
     call(t, 'edit', { file_path: '/work/a.ts', old_string: 'a', new_string: 'b' })
     t.event({ type: 'tool/result', data: { meta: { diffs: [{ path: 'a.ts', oldText: 'a\n', newText: 'b\nc\n' }] },
       message: { content: [{ type: 'tool-result', toolCallId: 'edit', content: [{ type: 'text', text: 'updated' }] }] },
     } } as SessionEvent)
-    expect(t.render('完成')).toContain('<summary>编辑 · a.ts +2 -1</summary>')
-    expect(t.render('完成')).toContain('```diff\n--- a.ts\n+++ a.ts\n-a\n+b\n+c\n```')
+    expect(t.render('完成')).toContain('编辑 · a.ts +2 -1')
+    expect(t.render('完成')).not.toContain('```diff\n--- a.ts\n+++ a.ts\n-a\n+b\n+c\n```')
   })
 
   it('does not count surface replacements as additional transcript messages', () => {
