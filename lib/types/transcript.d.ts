@@ -1,34 +1,38 @@
+/**
+ * DSH presentation rules adapted under the MIT License.
+ * MIT License
+ *
+ * Copyright (c) 2026 DeepSeek
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
 import type { SessionEvent } from '@deepseek-ai/dsh-session';
-type Call = Extract<SessionEvent, {
-    type: 'tool/call';
-}>['data'];
-interface ToolEntry {
-    kind: 'tool';
-    call: Call;
-    output?: string;
-    error?: {
-        name: string;
-        code: string;
-    };
-    failed?: boolean;
-    counted: boolean;
-    meta?: unknown;
-}
-export declare function disclosure(summary: string, body: string): string;
 /** Preserve Rich Markdown, but close unfinished fences/disclosures at each record boundary. */
 export declare function richBody(text: string): string;
-export declare function toolSummary(tool: ToolEntry, cwd?: string, home?: string): string;
+/** Retain visible assistant messages and counts only, never reasoning or tool payloads. */
 export declare class TelegramTranscript {
-    private readonly cwd?;
-    private readonly home?;
-    private readonly entries;
-    private readonly calls;
-    private latest?;
+    private readonly messages;
+    private tools;
+    private seen;
     private step;
-    constructor(cwd?: string | undefined, home?: string | undefined);
     event(event: SessionEvent): void;
     get answer(): string;
     get hasEntries(): boolean;
     render(answer: string): string;
 }
-export {};

@@ -34,7 +34,7 @@ export declare class TelegramProgress {
     private dirty;
     private nextSend;
     private lastSent;
-    constructor(client: TelegramClientLike, chatId: number, signal: AbortSignal, enqueue: (task: () => Promise<void>) => Promise<void>, warn: (error: unknown) => void, cwd?: string);
+    constructor(client: TelegramClientLike, chatId: number, signal: AbortSignal, enqueue: (task: () => Promise<void>) => Promise<void>, warn: (error: unknown) => void);
     /** Reject old attempts and revisions, including late chunks after a retry. */
     stream(frame: AssistantStreamFrame): void;
     event(event: SessionEvent): void;
@@ -47,7 +47,7 @@ export declare class TelegramProgress {
     stopByUser(): void;
     /** A terminal message clears a tool-only/failed draft even without an assistant answer. */
     terminalNotice(reason: string): string | undefined;
-    /** Deliver process history first, then the untouched answer as a separate message. */
+    /** One rich message: folded intermediate messages followed by the answer. */
     finalMessages(text: string): string[];
     /** Include late tool results and reasoning-only turns in the terminal delivery. */
     finishMessages(notice?: string): string[] | undefined;

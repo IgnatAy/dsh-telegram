@@ -35,7 +35,7 @@ function chunk(p: TelegramProgress, text: string, revision: number, attemptId = 
 }
 
 describe('TelegramProgress', () => {
-  it('folds committed reasoning, intermediate output and tools without duplicating the answer', () => {
+  it('folds intermediate messages and counts without reasoning or tool details', () => {
     const { p } = setup()
     const assistant = (content: unknown[]) => p.event({ type: 'assistant/message', data: { message: { content } } } as SessionEvent)
     assistant([{ type: 'reasoning', text: '先检查 <details> & 状态' }, { type: 'text', text: '正在检查' }])
@@ -45,12 +45,12 @@ describe('TelegramProgress', () => {
     ] } } } as SessionEvent)
     assistant([{ type: 'reasoning', text: '整理结果' }, { type: 'text', text: '**最终答案**' }])
     const result = p.finalMessages('**最终答案**').join('\n\n')
-    expect(result).toContain('先检查 &lt;details&gt; &amp; 状态')
+    expect(result).not.toContain('先检查 &lt;details&gt; &amp; 状态')
     expect(result).toContain('正在检查')
     expect(result).not.toContain('```json\n{\n  \"path\": \"a.ts\"\n}\n```')
-    expect(result).toContain('读取 · 文件不存在')
-    expect(result).toContain('文件不存在')
-    expect(result).toContain('整理结果')
+    expect(result).not.toContain('读取 · 文件不存在')
+    expect(result).not.toContain('文件不存在')
+    expect(result).not.toContain('整理结果')
     expect(result.match(/最终答案/g)).toHaveLength(1)
     expect(result).toMatch(/<\/details>\n\n\*\*最终答案\*\*$/)
     expect(result).not.toContain('<details open')
@@ -64,9 +64,7 @@ describe('TelegramProgress', () => {
       { type: 'reasoning', text: '只有思考' },
     ] } } } as SessionEvent)
     const messages = p.finalMessages('')
-    expect(messages).toHaveLength(1)
-    expect(messages[0]).toMatch(/^<details>/)
-    expect(messages[0]).toContain('只有思考')
+    expect(messages).toEqual([])
   })
 
   it('retains all committed steps, but never abandoned streaming attempts', () => {
@@ -90,11 +88,11 @@ describe('TelegramProgress', () => {
     p.event({ type: 'assistant/message', data: { message: { content: [
       { type: 'reasoning', text: '已确认的思考' },
     ] } } } as SessionEvent)
-    expect(p.finishMessages('任务已完成')?.join('\n\n')).toContain('已确认的思考')
+    expect(p.finishMessages('任务已完成')).toEqual(['任务已完成'])
     p.event({ type: 'tool/result', time: 101000, data: { message: { content: [
       { type: 'tool-result', toolCallId: 'a', content: [{ type: 'text', text: '迟到的结果' }] },
     ] } } } as SessionEvent)
-    expect(p.finishMessages('任务已完成')?.join('\n\n')).toContain('工具调用 · a')
+    expect(p.finishMessages('任务已完成')).toBeUndefined()
     p.stopByUser()
     expect(p.finishMessages('任务已完成')?.join('\n\n')).toBeUndefined()
   })
@@ -148,12 +146,12 @@ describe('TelegramProgress', () => {
       expect(client.sendRichMessageDraft.mock.calls.at(-1)?.[2]).toContain(prefix)
     }
     const code = '```html\n<details>source'
-    expect(p.finalMessages(code)[1]).toBe(code)
-    expect(p.finalMessages(code).join('\n\n')).toContain('read&lt;file&gt;')
-    for (const [, source] of richExamples) expect(p.finalMessages(source)[1]).toBe(source)
+    expect(p.finalMessages(code)[0]?.endsWith(code)).toBe(true)
+    expect(p.finalMessages(code).join('\n\n')).not.toContain('read&lt;file&gt;')
+    for (const [, source] of richExamples) expect(p.finalMessages(source)[0]?.endsWith(source)).toBe(true)
   })
 
-  it('omits large tool output while keeping the process summary and separate answer', () => {
+  it('combines tool counts and answer in one message without large tool output', () => {
     const { p } = setup()
     const log = '详细工具输出\n'.repeat(2000)
     p.event({ type: 'tool/call', time: 100000, data: { callId: 'a', name: 'read', arguments: '{}' } } as SessionEvent)
@@ -164,23 +162,24 @@ describe('TelegramProgress', () => {
       { type: 'text', text: '这是最终正文。' },
     ] } } } as SessionEvent)
     const result = p.finalMessages('这是最终正文。').join('\n\n')
-    expect(p.finalMessages('这是最终正文。')[1]).toBe('这是最终正文。')
+    expect(p.finalMessages('这是最终正文。')).toHaveLength(1)
+    expect(result.endsWith('</details>\n\n这是最终正文。')).toBe(true)
     expect(p.finalMessages('这是最终正文。')[0]).toMatch(/^<details>/)
     expect(result).not.toContain(log)
-    expect(result).toContain('读取')
+    expect(result).toContain('1 次工具调用 · 0 条消息')
     expect(result.match(/<details>/g)).toHaveLength(1)
     expect(result.match(/这是最终正文。/g)).toHaveLength(1)
     expect(p.finishMessages()).toBeUndefined()
   })
 
-  it('keeps an unfinished answer disclosure isolated from the process message', () => {
+  it('places the process disclosure before an unfinished answer', () => {
     const { p } = setup()
     p.event({ type: 'tool/call', time: 100000, data: { callId: 'a', name: 'read', arguments: '{}' } } as SessionEvent)
     const answer = '<details><summary>说明</summary>\n\n正文'
     const messages = p.finalMessages(answer)
-    expect(messages).toHaveLength(2)
+    expect(messages).toHaveLength(1)
     expect(messages[0]).toMatch(/^<details><summary>1 次工具调用/)
-    expect(messages[1]).toBe(answer)
+    expect(messages[0]?.endsWith('</details>\n\n' + answer)).toBe(true)
   })
 
   it('keeps the other tool running when parallel results arrive out of order', async () => {
@@ -243,8 +242,8 @@ describe('TelegramProgress', () => {
     ] } } } as SessionEvent)
     const final = p.finalMessages('完成').join('\n\n')
     expect(final).toContain('<details>')
-    expect(final).toContain('工具调用 · secret result')
-    expect(final).toContain('secret result')
+    expect(final).not.toContain('工具调用 · secret result')
+    expect(final).not.toContain('secret result')
   })
 
   it('reports a rejected native preview without creating legacy preview messages', async () => {

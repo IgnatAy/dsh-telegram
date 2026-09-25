@@ -2016,15 +2016,14 @@ describe('TelegramBridge', () => {
       type: 'assistant/message',
       data: { message: { content: [{ type: 'text', text: 'x'.repeat(40) }] } },
     } as SessionEvent)
-    await waitFor(() => h.sent.length === 3 ? true : undefined, 'separate intermediate outputs')
+    await waitFor(() => h.sent.length === 2 ? true : undefined, 'combined process and answer')
     const [first, ...finalChunks] = h.sent
     expect(first?.text).toBe('first')
     expect(finalChunks[0]?.text).toContain('<details>')
     expect(finalChunks[0]?.text).toContain('first')
     expect(finalChunks[0]?.text.startsWith('<details>')).toBe(true)
-    expect(finalChunks[0]?.text).not.toContain('x'.repeat(40))
-    expect(finalChunks[1]?.text).toBe('x'.repeat(40))
-    expect(finalChunks).toHaveLength(2)
+    expect(finalChunks[0]?.text.endsWith('</details>\n\n' + 'x'.repeat(40))).toBe(true)
+    expect(finalChunks).toHaveLength(1)
     expect(h.client.editMessageText).not.toHaveBeenCalled()
 
     h.emit(sessionId, {
@@ -2036,12 +2035,11 @@ describe('TelegramBridge', () => {
     expect(deleted).toContain(first!.messageId)
     for (const chunk of finalChunks) expect(deleted).not.toContain(chunk.messageId)
     h.client.getUpdates.mockResolvedValueOnce([update({ text: '/resend' })])
-    await waitFor(() => h.sent.length === 5 ? true : undefined, 'separate process and answer resend')
-    expect(h.sent[3]?.text).toBe(finalChunks[0]?.text)
-    expect(h.sent[4]?.text).toBe(finalChunks[1]?.text)
+    await waitFor(() => h.sent.length === 3 ? true : undefined, 'combined resend')
+    expect(h.sent[2]?.text).toBe(finalChunks[0]?.text)
   })
 
-  it('delivers a reasoning-only turn with late tool summaries and no result body', async () => {
+  it('delivers a completion notice for a reasoning-only turn without process details', async () => {
     const h = createHarness()
     h.bridge.start()
     await waitFor(() => h.polls.length > 0 ? true : undefined, 'polling')
@@ -2055,9 +2053,9 @@ describe('TelegramBridge', () => {
       { type: 'tool-result', toolCallId: 'a', content: [{ type: 'text', text: '已执行' }] },
     ] } } } as SessionEvent)
     h.emit(sessionId, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } } as SessionEvent)
-    const final = await waitFor(() => h.sent.find(message => message.text.includes('检查结果')), 'folded reasoning')
-    expect(final.text).toContain('<details>')
-    expect(final.text).toContain('工具调用 · a')
+    const final = await waitFor(() => h.sent.find(message => message.text.includes('任务已完成')), 'completion notice')
+    expect(final.text).not.toContain('<details>')
+    expect(final.text).not.toContain('检查结果')
     expect(final.text).not.toContain('已执行')
   })
 

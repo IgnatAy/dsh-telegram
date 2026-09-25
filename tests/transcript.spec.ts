@@ -18,93 +18,55 @@ function result(t: TelegramTranscript, id: string, text: string, isError = false
 }
 
 describe('DSH process disclosure projection', () => {
-  it('renders a tool with no input or output as a non-expandable summary', () => {
+  it('shows only numbered intermediate messages with rich formatting and call counts', () => {
     const t = new TelegramTranscript()
-    t.event({ type: 'tool/call', data: { name: 'empty_tool', callId: 'a', arguments: '', step: 1, turn: 1 } } as SessionEvent)
-    result(t, 'a', '')
-    const text = t.render('完成')
-    expect(text).toContain('工具调用 · empty_tool · a')
-    expect(text.match(/<details>/g)).toHaveLength(1)
-    expect(text).not.toMatch(/<\/summary>\s*<\/details>/)
-  })
-
-  it('keeps intermediate messages and summaries in one disclosure without inner detail bodies', () => {
-    const t = new TelegramTranscript()
-    assistant(t, 1, ['**检查中**', '\n\n| A | B |\n|---|---|\n| 1 | 2 |'], '**检查计划**\n\n- 检查文件')
+    assistant(t, 1, ['**检查中**', '\n\n| A | B |\n|---|---|\n| 1 | 2 |'], '私有思考')
     call(t, 'bash', { description: '运行测试', command: 'pnpm test' })
-    result(t, 'bash', '**全部通过**')
-    assistant(t, 2, ['完成'], '**整理结果**\n\n$x^2$')
-    const text = t.render('完成')
-    expect(text).toMatch(/^<details><summary>1 次工具调用 · 1 条消息<\/summary>/)
-    expect(text).toContain('思考 · 检查计划')
-    expect(text).toContain('思考 · 检查计划\n\n**检查中**')
-    expect(text).toContain('| A | B |')
-    expect(text).toContain('Bash · 运行测试')
-    expect(text).not.toContain('```bash\npnpm test\n```')
-    expect(text).not.toContain('**输出**\n\n**全部通过**')
-    expect(text).not.toContain('$x^2$')
-    expect(text).not.toContain('- 检查文件')
-    expect(text).not.toContain('完成')
+    result(t, 'bash', '工具结果')
+    assistant(t, 2, ['第二条消息'])
+    assistant(t, 3, ['最终正文'], '最终思考')
+    const text = t.render('最终正文')
+    expect(text).toContain('<summary>1 次工具调用 · 2 条消息</summary>')
+    expect(text).toContain('**消息 1**\n\n**检查中**\n\n| A | B |')
+    expect(text).toContain('\n\n---\n\n**消息 2**\n\n第二条消息')
+    for (const hidden of ['私有思考', '最终思考', '运行测试', 'pnpm test', '工具结果', '最终正文']) {
+      expect(text).not.toContain(hidden)
+    }
     expect(text.match(/<details>/g)).toHaveLength(1)
-    expect(text.match(/<\/details>/g)).toHaveLength(1)
   })
 
-  it('counts messages, not blocks or reasoning, and excludes every message in the final step', () => {
+  it('counts messages rather than blocks and excludes the final step', () => {
     const t = new TelegramTranscript()
     assistant(t, 1, [], '思考')
     assistant(t, 2, ['第一段', '第二段'])
     assistant(t, 3, ['同一步的消息'])
     assistant(t, 3, ['最后答案'])
-    expect(t.render('最后答案')).toMatch(/^<details><summary>1 条消息<\/summary>/)
+    expect(t.render('最后答案')).toContain('<summary>0 次工具调用 · 1 条消息</summary>')
+    expect(t.render('最后答案')).toContain('第一段第二段')
+    expect(t.render('最后答案')).not.toContain('同一步的消息')
     const reasoning = new TelegramTranscript()
     assistant(reasoning, 1, ['答案'], '仅有思考')
-    expect(reasoning.render('答案')).toMatch(/^<details><summary>已思考<\/summary>/)
+    expect(reasoning.render('答案')).toBe('')
   })
 
-  it('counts started calls and groups out-of-order results with their own call', () => {
+  it('counts all started calls without rendering tool details or counting results again', () => {
     const t = new TelegramTranscript()
     call(t, 'read', { file_path: 'a.ts' }, 'a')
     call(t, 'read', { file_path: 'b.ts' }, 'b')
     call(t, 'subagent_research', { prompt: '研究' })
     result(t, 'b', 'B 结果')
-    result(t, 'a', 'A 结果')
-    const text = t.render('完成')
-    expect(text).toContain('<summary>2 次工具调用 · 1 个 subagent</summary>')
-    expect(text.indexOf('读取 · a.ts')).toBeLessThan(text.indexOf('读取 · b.ts'))
-    expect(text).not.toContain('A 结果')
-    expect(text).not.toContain('B 结果')
+    result(t, 'a', 'A 结果', true)
+    expect(t.render('完成')).toBe('<details><summary>3 次工具调用 · 0 条消息</summary>\n\n暂无中间消息。\n\n</details>')
   })
 
-  it.each([
-    ['read', { file_path: '/work/src/a.ts' }, '读取 · src/a.ts'],
-    ['bash', { command: 'ls\npwd', description: '检查目录' }, 'Bash · 检查目录'],
-    ['glob', { pattern: '*.ts' }, 'Glob · *.ts'],
-    ['web_search', { queries: ['第一项\n换行', '第二项'] }, '网页搜索 · 第一项, 第二项'],
-    ['run_code', { description: '处理数据', code: 'return 1' }, '代码 · 处理数据'],
-    ['custom', { value: '参数' }, '工具调用 · custom · 参数'],
-    ['todo_write', { todos: [{ content: '完成项', status: 'completed' }, { content: '运行项', status: 'in_progress' }] }, '更新任务清单 · 1/2 已完成 · 运行项'],
-  ])('matches native row title and argument summary for %s', (name, args, title) => {
-    const t = new TelegramTranscript('/work', '/home/user')
-    call(t, String(name), args)
-    expect(t.render('完成')).toContain(title)
-  })
-
-  it('replaces a failed tool summary with the error first line', () => {
+  it('closes unfinished message syntax before the next message and outer boundary', () => {
     const t = new TelegramTranscript()
-    call(t, 'read', { file_path: 'a.ts' })
-    result(t, 'read', '文件不存在\n**请检查路径**', true)
-    expect(t.render('完成')).toContain('读取 · 文件不存在')
-    expect(t.render('完成')).not.toContain('**请检查路径**')
-  })
-
-  it('keeps native change counts without the diff body', () => {
-    const t = new TelegramTranscript('/work')
-    call(t, 'edit', { file_path: '/work/a.ts', old_string: 'a', new_string: 'b' })
-    t.event({ type: 'tool/result', data: { meta: { diffs: [{ path: 'a.ts', oldText: 'a\n', newText: 'b\nc\n' }] },
-      message: { content: [{ type: 'tool-result', toolCallId: 'edit', content: [{ type: 'text', text: 'updated' }] }] },
-    } } as SessionEvent)
-    expect(t.render('完成')).toContain('编辑 · a.ts +2 -1')
-    expect(t.render('完成')).not.toContain('```diff\n--- a.ts\n+++ a.ts\n-a\n+b\n+c\n```')
+    assistant(t, 1, ['```ts\nconst x = 1'])
+    assistant(t, 2, ['<details><summary>附注</summary>\n\n内容'])
+    assistant(t, 3, ['最终正文'])
+    const text = t.render('最终正文')
+    expect(text).toContain('const x = 1\n```\n\n---\n\n**消息 2**')
+    expect(text).toContain('内容\n\n</details>\n\n</details>')
   })
 
   it('does not count surface replacements as additional transcript messages', () => {
@@ -114,7 +76,7 @@ describe('DSH process disclosure projection', () => {
       message: { content: [{ type: 'text', text: '内部压缩替换' }] },
     } } as unknown as SessionEvent)
     assistant(t, 2, ['最终答案'])
-    expect(t.render('最终答案')).toContain('<summary>1 条消息</summary>')
+    expect(t.render('最终答案')).toContain('<summary>0 次工具调用 · 1 条消息</summary>')
     expect(t.render('最终答案')).not.toContain('内部压缩替换')
   })
 

@@ -58,9 +58,8 @@ export class TelegramProgress {
     signal: AbortSignal,
     private readonly enqueue: (task: () => Promise<void>) => Promise<void>,
     private readonly warn: (error: unknown) => void,
-    cwd?: string,
   ) {
-    this.transcript = new TelegramTranscript(cwd)
+    this.transcript = new TelegramTranscript()
     this.signal = AbortSignal.any([signal, this.abort.signal])
     this.timer = setInterval(() => this.schedule(), 1200)
     this.schedule()
@@ -170,7 +169,7 @@ export class TelegramProgress {
   /** A terminal message clears a tool-only/failed draft even without an assistant answer. */
   terminalNotice(reason: string): string | undefined {
     if (this.stoppedByUser) return undefined
-    if (reason === 'completed') return this.paused ? undefined : '✅ **任务已完成**'
+    if (reason === 'completed') return this.paused && this.transcript.answer.trim() ? undefined : '✅ **任务已完成**'
     if (reason === 'aborted' || reason === 'interrupted') return '⏹ **任务已中断**'
     if (reason === 'error') return '⚠️ **任务执行失败**，请检查 dsh 日志。'
     if (reason === 'blocked') return '⚠️ **任务暂时无法继续**'
@@ -178,9 +177,10 @@ export class TelegramProgress {
     return 'ℹ️ **任务已结束**'
   }
 
-  /** Deliver process history first, then the untouched answer as a separate message. */
+  /** One rich message: folded intermediate messages followed by the answer. */
   finalMessages(text: string): string[] {
-    const messages = [this.processDetails(text), text].filter(part => part.trim())
+    const markdown = [this.processDetails(text), text].filter(part => part.trim()).join('\n\n')
+    const messages = markdown ? [markdown] : []
     this.lastPublished = JSON.stringify(messages)
     return messages
   }
