@@ -6,29 +6,13 @@ import type { TelegramClientLike } from './client.js'
 import { escapeHtml } from './format.js'
 import { TelegramTranscript } from './transcript.js'
 
-interface ToolProgress {
-  id: string
-  name: string
-  started: number
-  ended?: number
-  failed?: boolean
-}
-
-/** Bound preview text without cutting a UTF-16 surrogate pair. Final answers are never clipped. */
-function clip(text: string, limit: number): string {
-  if (text.length <= limit) return text
-  let end = limit - 1
-  if (/[\uD800-\uDBFF]/.test(text[end - 1] ?? '')) end--
-  return `${text.slice(0, end)}…`
-}
-
 /**
  * One turn's disposable preview. Events mutate bounded state synchronously; a
  * coalescer sends only the latest snapshot through the bridge's delivery queue.
  * No tool arguments or result bodies are copied into the preview.
  */
 export class TelegramProgress {
-  private draftId = randomInt(1, 2 ** 31)
+  private readonly draftId = randomInt(1, 2 ** 31)
   private readonly started = Date.now()
   private readonly abort = new AbortController()
   private readonly signal: AbortSignal
@@ -38,8 +22,7 @@ export class TelegramProgress {
   private text = ''
   private previewOverflow = false
   private phase = '正在思考'
-  private tools: ToolProgress[] = []
-  private completed = 0
+  private readonly activeTools = new Set<string>()
   private readonly transcript: TelegramTranscript
   private lastPublished = ''
   private paused = false
@@ -105,9 +88,7 @@ export class TelegramProgress {
     if (this.disposed) return
     this.transcript.event(event)
     if (event.type === 'tool/call') {
-      // Keep active calls plus a bounded recent history.
-      this.tools = this.tools.filter((tool, index) => tool.ended === undefined || index >= this.tools.length - 12)
-      this.tools.push({ id: event.data.callId, name: clip(event.data.name, 80), started: event.time })
+      this.activeTools.add(event.data.callId)
       this.text = ''
       this.previewOverflow = false
       this.phase = '正在执行工具'
@@ -115,14 +96,9 @@ export class TelegramProgress {
     } else if (event.type === 'tool/result') {
       for (const block of event.data.message.content) {
         if (block.type !== 'tool-result') continue
-        const tool = this.tools.find(tool => tool.id === block.toolCallId && tool.ended === undefined)
-        if (tool !== undefined) {
-          tool.ended = event.time
-          tool.failed = block.isError === true
-          this.completed++
-        }
+        this.activeTools.delete(block.toolCallId)
       }
-      this.phase = this.tools.some(tool => tool.ended === undefined) ? '正在执行工具' : '正在整理工具结果'
+      this.phase = this.activeTools.size ? '正在执行工具' : '正在整理工具结果'
       this.changed()
     } else if (event.type === 'step/start') {
       this.text = ''
@@ -169,7 +145,7 @@ export class TelegramProgress {
   /** A terminal message clears a tool-only/failed draft even without an assistant answer. */
   terminalNotice(reason: string): string | undefined {
     if (this.stoppedByUser) return undefined
-    if (reason === 'completed') return this.paused && this.transcript.answer.trim() ? undefined : '✅ **任务已完成**'
+    if (reason === 'completed') return this.transcript.answer.trim() ? undefined : '✅ **任务已完成**'
     if (reason === 'aborted' || reason === 'interrupted') return '⏹ **任务已中断**'
     if (reason === 'error') return '⚠️ **任务执行失败**，请检查 dsh 日志。'
     if (reason === 'blocked') return '⚠️ **任务暂时无法继续**'
@@ -197,16 +173,8 @@ export class TelegramProgress {
     return this.transcript.render(answer)
   }
 
-  private toolLines(): string[] {
-    return this.tools.slice(-12).map(tool => {
-      const seconds = Math.max(0, Math.round(((tool.ended ?? Date.now()) - tool.started) / 1000))
-      return `${tool.ended === undefined ? '⏳' : tool.failed ? '❌' : '✅'} ${tool.name} · ${seconds} 秒`
-    })
-  }
-
   private status(): string {
-    const active = this.tools.filter(tool => tool.ended === undefined).map(tool => tool.name).slice(0, 3)
-    return `${this.phase}${active.length === 0 ? '' : `：${active.join('、')}`} · ${Math.floor((Date.now() - this.started) / 1000)} 秒`
+    return `${this.phase} · ${Math.floor((Date.now() - this.started) / 1000)} 秒`
   }
 
   private schedule(): void {
@@ -241,16 +209,14 @@ export class TelegramProgress {
 
   private async send(): Promise<void> {
     const status = this.status()
-    // Reusing an ID animates every rewrite, including the changing status and
-    // tool header. Replace snapshots without replaying that typing animation.
-    this.draftId = this.draftId % (2 ** 31 - 1) + 1
+    // One stable draft per turn: replacing its ID makes Telegram remove and
+    // recreate the preview on every update.
     // Partial disclosures may have only a summary (or an unfinished body).
     // Leave them to committed delivery, where the complete source is available.
-    const preview = this.previewOverflow ? '回复较长，完整内容将在本段生成完成后显示。'
-      : /<\/?(?:details|summary)\b/i.test(this.text) ? '折叠内容将在本段生成完成后显示。'
+    const preview = this.previewOverflow ? '回复较长，完整内容将在任务结束后显示。'
+      : /<\/?(?:details|summary)\b/i.test(this.text) ? '折叠内容将在任务结束后显示。'
       : this.text
-    const lines = [status, ...(this.tools.length ? [`已完成 ${this.completed} 次工具调用`, ...this.toolLines()] : [])]
     await this.client.sendRichMessageDraft(this.chatId, this.draftId,
-      `<tg-thinking>${lines.map(escapeHtml).join('<br>')}</tg-thinking>\n\n${preview}`, this.signal)
+      `<tg-thinking>${escapeHtml(status)}</tg-thinking>\n\n${preview}`, this.signal)
   }
 }

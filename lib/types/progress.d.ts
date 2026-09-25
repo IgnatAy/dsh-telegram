@@ -11,7 +11,7 @@ export declare class TelegramProgress {
     private readonly chatId;
     private readonly enqueue;
     private readonly warn;
-    private draftId;
+    private readonly draftId;
     private readonly started;
     private readonly abort;
     private readonly signal;
@@ -21,8 +21,7 @@ export declare class TelegramProgress {
     private text;
     private previewOverflow;
     private phase;
-    private tools;
-    private completed;
+    private readonly activeTools;
     private readonly transcript;
     private lastPublished;
     private paused;
@@ -52,7 +51,6 @@ export declare class TelegramProgress {
     /** Include late tool results and reasoning-only turns in the terminal delivery. */
     finishMessages(notice?: string): string[] | undefined;
     private processDetails;
-    private toolLines;
     private status;
     private schedule;
     private send;

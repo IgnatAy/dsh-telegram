@@ -136,6 +136,7 @@ export declare class TelegramBridge {
     private submitParts;
     /** Return a chat state without selecting a workspace or creating an Agent. */
     private stateFor;
+    private defaultPreferences;
     /** Read the adapter-owned model catalog and retain the current route if it is unlisted. */
     private loadModelCatalog;
     /** Resolve exact metadata for the model currently selected by one chat. */
@@ -214,13 +215,9 @@ export declare class TelegramBridge {
     private enqueue;
     /** Turn start: remove artifacts from an unbalanced previous turn, then show typing. */
     private onTurnStart;
-    /** Send each complete assistant step as a fresh message instead of editing prior output. */
+    /** Persist the complete turn once, including its intermediate transcript. */
     private onAssistantText;
-    /**
-     * Turn finished: the latest assistant step is already visible as the final
-     * answer, so remove every prior output and interaction artifact. An aborted
-     * turn has no final answer and removes the latest partial output too.
-     */
+    /** Remove interaction artifacts after the complete turn has been delivered. */
     private onTurnEnd;
     /** Add a bot or user interaction message to the current turn's cleanup set. */
     private trackTransientMessage;

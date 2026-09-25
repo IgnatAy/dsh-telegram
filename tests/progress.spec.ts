@@ -192,11 +192,11 @@ describe('TelegramProgress', () => {
     ] } } } as SessionEvent)
     await drain()
     const html = client.sendRichMessageDraft.mock.calls.at(-1)?.[2]
-    expect(html).toContain('正在执行工具：tool-a')
-    expect(html).toContain('✅ tool-b')
+    expect(html).toContain('正在执行工具')
+    expect(html).not.toMatch(/tool-a|tool-b|✅|⏳|已完成/)
   })
 
-  it('coalesces tokens and replaces snapshots without animation, refreshing before expiry', async () => {
+  it('coalesces tokens in one stable draft, refreshing before expiry', async () => {
     const { p, client, drain } = setup()
     start(p)
     await drain()
@@ -208,7 +208,7 @@ describe('TelegramProgress', () => {
     await vi.advanceTimersByTimeAsync(12000)
     expect(client.sendRichMessageDraft).toHaveBeenCalledTimes(3)
     const ids = client.sendRichMessageDraft.mock.calls.map(call => call[1])
-    expect(new Set(ids).size).toBe(ids.length)
+    expect(new Set(ids).size).toBe(1)
     expect(ids.every(id => Number.isInteger(id) && Number(id) > 0)).toBe(true)
   })
 
@@ -327,8 +327,8 @@ describe('TelegramProgress', () => {
     await drain()
     const preview = String(client.sendRichMessageDraft.mock.calls.at(-1)?.[2])
     expect(preview).not.toContain('<details>')
-    expect(preview).toContain('折叠内容将在本段生成完成后显示')
-    expect(preview).toContain('⏳ read')
+    expect(preview).toContain('折叠内容将在任务结束后显示')
+    expect(preview).not.toMatch(/read|⏳|✅|已完成/)
     const complete = '<details><summary>摘要</summary>\n\n正文\n\n</details>'
     expect(p.finalMessages(complete).join('\n\n')).toContain(complete)
   })

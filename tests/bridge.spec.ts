@@ -142,8 +142,8 @@ function createHarness(
     {
       provider: 'deepseek-official',
       providerName: 'DeepSeek',
-      id: 'deepseek-v4-flash',
-      name: 'DeepSeek V4 Flash',
+      id: 'deepseek-flash',
+      name: 'DeepSeek V4.1 Flash',
       efforts: [
         { id: 'off', name: 'Off' },
         { id: 'low', name: 'Low' },
@@ -610,6 +610,28 @@ function approvalHandler(handle: FakeHandle): TestApprovalHandler {
 }
 
 describe('TelegramBridge', () => {
+  it.each(['command', 'menu'])('resets new sessions to the startup model through %s', async source => {
+    const h = createHarness()
+    await selectNew(h)
+    expect(h.ctx.agents.create.mock.calls[0]?.[0]).toMatchObject({
+      agentOptions: { provider: 'deepseek-official', model: 'deepseek-flash' },
+    })
+    await dispatch(h, update({ text: '/menu' }))
+    await clickMenu(h, '切换模型')
+    await clickMenu(h, 'DeepSeek V4 Pro')
+    await clickMenu(h, '推理强度')
+    await clickMenu(h, 'Low')
+    if (source === 'command') await dispatch(h, update({ text: '/new' }))
+    else await selectNew(h)
+    expect(h.ctx.agents.create.mock.calls.at(-1)?.[0]).toMatchObject({
+      agentOptions: { provider: 'deepseek-official', model: 'deepseek-flash' },
+    })
+    await dispatch(h, update({ text: '/menu' }))
+    expect(h.sent.at(-1)?.text).toContain('DeepSeek V4.1 Flash')
+    await clickMenu(h, '推理强度')
+    expect(menuButtons(h).buttons.find(button => button.text.includes('High'))?.text).toContain('✓')
+  })
+
   it.each([['o0', 'allowed-once'], ['o1', 'rejected']])('routes approval choice %s back to DSH', async (action, outcome) => {
     const h = createHarness()
     const handle = await selectNew(h)
@@ -688,7 +710,7 @@ describe('TelegramBridge', () => {
     const panel = h.sent.at(-1)!
     expect(panel.text).toContain('# 🎛 控制面板')
     expect(panel.text).toContain('未选择')
-    expect(panel.text).toContain('DeepSeek V4 Flash')
+    expect(panel.text).toContain('DeepSeek V4.1 Flash')
     expect(panel.text).toContain('**思考强度**：<code>High</code>')
     expect(panel.text).not.toContain('模型默认')
     expect(panel.text).toContain('现有工作区 / 会话')
@@ -706,8 +728,8 @@ describe('TelegramBridge', () => {
     await clickMenu(h, '切换模型')
     const { panel, buttons } = menuButtons(h)
     expect(panel.text).not.toContain('deepseek-official')
-    expect(panel.text).not.toContain('deepseek-v4-flash')
-    expect(buttons.some(button => button.text === '✓ DeepSeek V4 Flash')).toBe(true)
+    expect(panel.text).not.toContain('deepseek-flash')
+    expect(buttons.some(button => button.text === '✓ DeepSeek V4.1 Flash')).toBe(true)
     await clickMenu(h, 'V4 Pro')
     await clickMenu(h, '刷新状态')
     await clickMenu(h, '刷新状态')
@@ -784,7 +806,7 @@ describe('TelegramBridge', () => {
 
   it('applies adapter-defined reasoning and resets it when selecting another model', async () => {
     const h = createHarness({}, { models: [
-      { provider: 'deepseek-official', providerName: 'DeepSeek', id: 'deepseek-v4-flash', name: 'Flash', efforts: [{ id: 'intense', name: 'Intense' }], defaultEffort: 'intense' },
+      { provider: 'deepseek-official', providerName: 'DeepSeek', id: 'deepseek-flash', name: 'Flash', efforts: [{ id: 'intense', name: 'Intense' }], defaultEffort: 'intense' },
       { provider: 'deepseek-official', providerName: 'DeepSeek', id: 'other', name: 'Other' },
     ] })
     await dispatch(h, update({ text: '/menu' }))
@@ -792,7 +814,7 @@ describe('TelegramBridge', () => {
     // The effective default is checked without adding a separate default option.
     const { panel, buttons } = menuButtons(h)
     await dispatch(h, callbackUpdate(buttons.find(button => button.text === '✓ Intense')!.callback_data, 100, panel.messageId))
-    expect(h.ctx.llm.resolveCallConfig).toHaveBeenLastCalledWith({ provider: 'deepseek-official', model: 'deepseek-v4-flash', reasoningEffort: 'intense' }, expect.any(AbortSignal))
+    expect(h.ctx.llm.resolveCallConfig).toHaveBeenLastCalledWith({ provider: 'deepseek-official', model: 'deepseek-flash', reasoningEffort: 'intense' }, expect.any(AbortSignal))
     await clickMenu(h, '切换模型')
     await clickMenu(h, 'Other')
     expect(h.ctx.llm.resolveCallConfig).toHaveBeenLastCalledWith({ provider: 'deepseek-official', model: 'other' }, expect.any(AbortSignal))
@@ -1024,7 +1046,7 @@ describe('TelegramBridge', () => {
     expect(h.ctx.sessionController.selectModel).toHaveBeenCalledWith(expect.objectContaining({
       sessionId: 's-live',
       provider: 'deepseek-official',
-      model: 'deepseek-v4-flash',
+      model: 'deepseek-flash',
     }))
 
     const live = h.ctx.agents.get('s-live') as FakeAgent
@@ -1513,6 +1535,8 @@ describe('TelegramBridge', () => {
     h.bridge.start()
     await waitFor(() => h.polls.length > 0 ? true : undefined, 'polling')
     const handle = await selectNew(h)
+    h.emit(handle.agent.session.id, { type: 'turn/start', data: { turn: 1 } } as SessionEvent)
+    await settle()
     handle.agent.status = 'running'
     const ask = await installQuestionHandler(h, handle)
     const answerPromise = ask({
@@ -1637,7 +1661,7 @@ describe('TelegramBridge', () => {
     const h = createHarness({
       preset: 'standard',
       provider: 'deepseek-official',
-      model: 'deepseek-v4-flash',
+      model: 'deepseek-flash',
       reasoningEffort: 'high',
     })
     await selectSession(h, 1, 0)
@@ -1683,7 +1707,7 @@ describe('TelegramBridge', () => {
     expect(assemble).toBeDefined()
     expect(request).toBeDefined()
     const assembly = await assemble?.({}, {}, async () => ({ variables: {} })) as { variables: Record<string, unknown> }
-    expect(assembly.variables).toMatchObject({ provider: 'deepseek-official', model: 'deepseek-v4-flash' })
+    expect(assembly.variables).toMatchObject({ provider: 'deepseek-official', model: 'deepseek-flash' })
     const selected = await request?.({}, async () => ({
       provider: 'inherited',
       model: 'inherited',
@@ -1691,7 +1715,7 @@ describe('TelegramBridge', () => {
     })) as Record<string, unknown>
     expect(selected).toMatchObject({
       provider: 'deepseek-official',
-      model: 'deepseek-v4-flash',
+      model: 'deepseek-flash',
       reasoningEffort: 'high',
     })
   })
@@ -1883,6 +1907,7 @@ describe('TelegramBridge', () => {
     await waitFor(() => h.polls.length > 0 ? true : undefined, 'polling')
     await selectNew(h)
     const long = '- [x] 完成\n\n$$\\frac{1}{2}$$\n\n' + '中'.repeat(25000)
+    h.emit(h.agents[0]!.agent.session.id, { type: 'turn/start', data: { turn: 1 } } as SessionEvent)
     h.emit(h.agents[0]!.agent.session.id, {
       type: 'assistant/message',
       data: { message: { content: [{ type: 'text', text: long }] } },
@@ -1916,6 +1941,7 @@ describe('TelegramBridge', () => {
     await selectNew(h)
     h.client.sendMessage.mockClear()
     h.client.sendRichMessage = vi.fn(async () => { throw new Error('network down') })
+    h.emit(h.agents[0]!.agent.session.id, { type: 'turn/start', data: { turn: 1 } } as SessionEvent)
     h.emit(h.agents[0]!.agent.session.id, {
       type: 'assistant/message',
       data: { message: { content: [{ type: 'text', text: 'hello' }] } },
@@ -1935,10 +1961,12 @@ describe('TelegramBridge', () => {
     await selectNew(h)
     const directory = cacheDirectories[cacheDirectories.length - 1]!
     h.client.sendRichMessage = vi.fn(async () => { throw new Error('offline') })
+    h.emit(h.agents[0]!.agent.session.id, { type: 'turn/start', data: { turn: 1 } } as SessionEvent)
     h.emit(h.agents[0]!.agent.session.id, {
       type: 'assistant/message',
       data: { message: { content: [{ type: 'text', text: 'saved answer' }] } },
     } as SessionEvent)
+    h.emit(h.agents[0]!.agent.session.id, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } } as SessionEvent)
     await waitFor(() => h.ctx.logger.error.mock.calls.length ? true : undefined, 'failed delivery cached')
     await h.bridge.stop()
     const restarted = createHarness({ resultCacheDirectory: directory })
@@ -1953,15 +1981,15 @@ describe('TelegramBridge', () => {
     expect(commands.some(entry => entry.command === 'resend')).toBe(true)
   })
 
-  it('keeps earlier visible output when the final delivery fails', async () => {
+  it('does not post intermediate messages or delete output when final delivery fails', async () => {
     const h = createHarness()
     h.bridge.start()
     await selectNew(h)
     const id = h.agents[0]!.agent.session.id
     h.emit(id, { type: 'turn/start', data: { turn: 1 } } as SessionEvent)
     h.emit(id, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'intermediate' }] } } } as SessionEvent)
-    await waitFor(() => h.sent.length ? true : undefined, 'intermediate delivered')
     await settle()
+    expect(h.sent).toHaveLength(0)
     h.client.sendRichMessage = vi.fn(async () => { throw new Error('offline') })
     h.emit(id, { type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'final' }] } } } as SessionEvent)
     h.emit(id, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } } as SessionEvent)
@@ -2001,42 +2029,31 @@ describe('TelegramBridge', () => {
     expect(h.actions[0]).toEqual({ chatId: 7, action: 'typing' })
   })
 
-  it('sends every assistant step separately, then deletes prior steps and keeps the final step', async () => {
+  it('keeps all steps in one final message without intermediate posts or deletions', async () => {
     const h = createHarness({ maxMessageLength: 16 })
     h.bridge.start()
-    await waitFor(() => h.polls.length > 0 ? true : undefined, 'polling')
     await selectNew(h)
     const sessionId = h.agents[0]!.agent.session.id
     h.emit(sessionId, { type: 'turn/start', data: { turn: 1 } } as SessionEvent)
-    h.emit(sessionId, {
-      type: 'assistant/message',
-      data: { message: { content: [{ type: 'text', text: 'first' }] } },
-    } as SessionEvent)
-    h.emit(sessionId, {
-      type: 'assistant/message',
-      data: { message: { content: [{ type: 'text', text: 'x'.repeat(40) }] } },
-    } as SessionEvent)
-    await waitFor(() => h.sent.length === 2 ? true : undefined, 'combined process and answer')
-    const [first, ...finalChunks] = h.sent
-    expect(first?.text).toBe('first')
-    expect(finalChunks[0]?.text).toContain('<details>')
-    expect(finalChunks[0]?.text).toContain('first')
-    expect(finalChunks[0]?.text.startsWith('<details>')).toBe(true)
-    expect(finalChunks[0]?.text.endsWith('</details>\n\n' + 'x'.repeat(40))).toBe(true)
-    expect(finalChunks).toHaveLength(1)
-    expect(h.client.editMessageText).not.toHaveBeenCalled()
-
-    h.emit(sessionId, {
-      type: 'turn/end',
-      data: { turn: 1, reason: { kind: 'completed' } },
-    } as SessionEvent)
-    await waitFor(() => h.client.deleteMessages.mock.calls[0] ? true : undefined, 'intermediate cleanup')
-    const deleted = h.client.deleteMessages.mock.calls[0]?.[1] as number[]
-    expect(deleted).toContain(first!.messageId)
-    for (const chunk of finalChunks) expect(deleted).not.toContain(chunk.messageId)
+    for (const text of ['first', 'second', 'x'.repeat(40)]) {
+      h.emit(sessionId, { type: 'assistant/message',
+        data: { message: { content: [{ type: 'text', text }] } },
+      } as SessionEvent)
+      await settle()
+      expect(h.sent).toHaveLength(0)
+    }
+    h.emit(sessionId, { type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } } as SessionEvent)
+    await waitFor(() => h.sent.length === 1 ? true : undefined, 'complete turn')
+    const final = h.sent[0]!.text
+    expect(final).toContain('first')
+    expect(final).toContain('second')
+    expect(final).toContain('0 次工具调用 · 2 条消息')
+    expect(final.endsWith('</details>\n\n' + 'x'.repeat(40))).toBe(true)
+    await settle()
+    expect(h.client.deleteMessages).not.toHaveBeenCalled()
     h.client.getUpdates.mockResolvedValueOnce([update({ text: '/resend' })])
-    await waitFor(() => h.sent.length === 3 ? true : undefined, 'combined resend')
-    expect(h.sent[2]?.text).toBe(finalChunks[0]?.text)
+    await waitFor(() => h.sent.length === 2 ? true : undefined, 'combined resend')
+    expect(h.sent[1]?.text).toBe(final)
   })
 
   it('delivers a completion notice for a reasoning-only turn without process details', async () => {

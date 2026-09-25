@@ -117,8 +117,8 @@ interface ChatState {
   readonly chatId: number
   workspace: Workspace | undefined
   active: ActiveChatSession | undefined
-  /** Settings retained while switching, clearing, or creating sessions. */
-  readonly preferences: ChatPreferences
+  /** Settings retained while switching or clearing; new sessions reset to defaults. */
+  preferences: ChatPreferences
 }
 
 /** One verified image downloaded from Telegram into the selected workspace. */
@@ -437,13 +437,6 @@ const START_MESSAGES = [
   '哼，你来得倒挺准，刚好赶上我准备休息。说吧说吧，帮完这次再偷懒。',
 ] as const
 
-/** Extract the concatenated text blocks of an assistant message. */
-function assistantText(event: Extract<SessionEvent, { type: 'assistant/message' }>): string | undefined {
-  const blocks = event.data.message.content.filter(block => block.type === 'text')
-  const text = blocks.map(block => block.text).join('')
-  return text === '' ? undefined : text
-}
-
 /** A stable message string for logging, whatever the thrown shape. */
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -636,7 +629,7 @@ export class TelegramBridge {
       throw new RangeError('telegram: reasoningEffort must be off, low, high, max, or empty')
     }
     const provider = (options.provider ?? 'deepseek-official').trim()
-    const model = (options.model ?? 'deepseek-v4-flash').trim()
+    const model = (options.model ?? 'deepseek-flash').trim()
     if (provider === '') throw new Error('telegram: provider must not be empty')
     if (model === '') throw new Error('telegram: model must not be empty')
     this.resultCache = new TelegramResultCache(options.token, options.resultCacheDirectory)
@@ -1535,16 +1528,20 @@ export class TelegramBridge {
       chatId,
       workspace: undefined,
       active: undefined,
-      preferences: {
-        selection: {
-          provider: this.provider,
-          model: this.model,
-          ...(this.defaultEffort === undefined ? {} : { reasoningEffort: ReasoningEffortId(this.defaultEffort) }),
-        },
-      },
+      preferences: this.defaultPreferences(),
     }
     this.chats.set(key, state)
     return state
+  }
+
+  private defaultPreferences(): ChatPreferences {
+    return {
+      selection: {
+        provider: this.provider,
+        model: this.model,
+        ...(this.defaultEffort === undefined ? {} : { reasoningEffort: ReasoningEffortId(this.defaultEffort) }),
+      },
+    }
   }
 
   /** Read the adapter-owned model catalog and retain the current route if it is unlisted. */
@@ -1752,16 +1749,17 @@ export class TelegramBridge {
   private async createAndBind(chatId: number, workspace: Workspace): Promise<ActiveChatSession> {
     if (await workspace.status() !== 'ok') throw new Error(`工作区目录不存在：${workspace.path}`)
     const state = this.stateFor(chatId)
+    const preferences = this.defaultPreferences()
     const sessionId = SessionId(`telegram:${chatId}:${randomUUID()}`)
     const handle = await this.ctx.agents.create({
       sessionId,
       meta: { cwd: workspace.path, ...(this.preset === undefined ? {} : { agentPreset: this.preset }) },
       agentOptions: {
-        provider: state.preferences.selection.provider,
-        model: state.preferences.selection.model,
+        provider: preferences.selection.provider,
+        model: preferences.selection.model,
       },
       signal: this.abortController.signal,
-      setup: this.makeSetup(state.preferences, this.preset),
+      setup: this.makeSetup(preferences, this.preset),
     })
     this.ownedAgents.set(String(sessionId), { chatId, handle })
     let attached = false
@@ -1771,6 +1769,7 @@ export class TelegramBridge {
       attached = true
       active = this.activeSession(chatId, workspace, handle.agent)
       await this.bind(state, active)
+      state.preferences = preferences
       return active
     } catch (error) {
       active?.releaseBinding()
@@ -2438,16 +2437,10 @@ export class TelegramBridge {
           task => this.enqueue(chat, task),
           error => this.ctx.logger.warn('[telegram] preview failed: %s', messageOf(error)))
         break
-      case 'assistant/message': {
-        chat.progress?.pause()
+      case 'assistant/message':
+        // Committed steps belong to this turn's transcript, not separate posts.
         chat.progress?.event(event)
-        const text = assistantText(event)
-        if (text !== undefined) {
-          const messages = chat.progress?.finalMessages(text) ?? [text]
-          void this.enqueue(chat, () => this.onAssistantText(chat, messages))
-        }
         break
-      }
       case 'turn/end': {
         const notice = chat.progress?.terminalNotice(event.data.reason?.kind ?? 'completed')
         const final = event.data.reason?.kind === 'aborted' ? undefined : chat.progress?.finishMessages(notice)
@@ -2480,7 +2473,7 @@ export class TelegramBridge {
     this.startTyping(chat)
   }
 
-  /** Send each complete assistant step as a fresh message instead of editing prior output. */
+  /** Persist the complete turn once, including its intermediate transcript. */
   private async onAssistantText(chat: ActiveChatSession, text: string | string[]): Promise<void> {
     for (const messageId of chat.latestAssistantMessageIds) {
       chat.transientMessageIds.add(messageId)
@@ -2498,11 +2491,7 @@ export class TelegramBridge {
     chat.latestDeliveryFailed = false
   }
 
-  /**
-   * Turn finished: the latest assistant step is already visible as the final
-   * answer, so remove every prior output and interaction artifact. An aborted
-   * turn has no final answer and removes the latest partial output too.
-   */
+  /** Remove interaction artifacts after the complete turn has been delivered. */
   private async onTurnEnd(chat: ActiveChatSession, event: Extract<SessionEvent, { type: 'turn/end' }>, notice?: string): Promise<void> {
     this.stopTyping(chat)
     const aborted = event.data.reason?.kind === 'aborted'
