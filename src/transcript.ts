@@ -44,6 +44,9 @@ interface ToolEntry {
 type Entry = { kind: 'assistant', event: Assistant } | ToolEntry
 
 export function disclosure(summary: string, body: string): string {
+  // A tool can legitimately finish without input/output. Do not create an
+  // expand control with nothing behind it; keep its summary in the process log.
+  if (!body.trim()) return escapeHtml(summary)
   return `<details><summary>${escapeHtml(summary)}</summary>\n\n${body}\n\n</details>`
 }
 

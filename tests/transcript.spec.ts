@@ -18,6 +18,16 @@ function result(t: TelegramTranscript, id: string, text: string, isError = false
 }
 
 describe('DSH process disclosure projection', () => {
+  it('renders a tool with no input or output as a non-expandable summary', () => {
+    const t = new TelegramTranscript()
+    t.event({ type: 'tool/call', data: { name: 'empty_tool', callId: 'a', arguments: '', step: 1, turn: 1 } } as SessionEvent)
+    result(t, 'a', '')
+    const text = t.render('完成')
+    expect(text).toContain('工具调用 · empty_tool · a')
+    expect(text.match(/<details>/g)).toHaveLength(1)
+    expect(text).not.toMatch(/<\/summary>\s*<\/details>/)
+  })
+
   it('puts messages at depth one and reasoning/paired tools at depth two', () => {
     const t = new TelegramTranscript()
     assistant(t, 1, ['**检查中**', '\n\n| A | B |\n|---|---|\n| 1 | 2 |'], '**检查计划**\n\n- 检查文件')

@@ -1,4 +1,4 @@
-/** One replaceable, unsent complete output per bot/chat; never a history log. */
+/** One replaceable complete output per bot/chat; retained for display recovery. */
 export declare class TelegramResultCache {
     private readonly queues;
     readonly directory: string;

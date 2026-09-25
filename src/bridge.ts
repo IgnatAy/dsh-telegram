@@ -365,9 +365,9 @@ const HELP_TEXT = [
   '| :--- | :--- |',
   '| /start | 确认 Bot 在线 |',
   '| /help | 显示本页 |',
-  '| /resend | 补发最后一份未送达结果 |',
+  '| /resend | 重发最后一份完整结果 |',
   '',
-  '补发成功后会删除当前聊天的结果缓存。',
+  '每个聊天保留最后一份完整结果，发送成功后仍可重发，新结果会覆盖旧缓存。',
 ].join('\n')
 
 /** Slash-command list registered with Telegram via setMyCommands. */
@@ -381,7 +381,7 @@ const MY_COMMANDS = [
   { command: 'send', description: '提交收集内容' },
   { command: 'discard', description: '放弃本次收集' },
   { command: 'followup', description: '将消息排到当前任务之后' },
-  { command: 'resend', description: '补发最后一份未送达的缓存结果' },
+  { command: 'resend', description: '重发最后一份完整结果' },
   { command: 'help', description: '查看使用帮助' },
 ]
 
@@ -901,7 +901,7 @@ export class TelegramBridge {
         try {
           const sent = await this.resultCache.resend(chatId, text =>
             this.client.sendRichMessage(chatId, text, this.abortController.signal))
-          if (!sent) await this.safeSend(chatId, 'ℹ️ **没有待补发的结果**\n\n当前没有待发送的缓存结果。')
+          if (!sent) await this.safeSend(chatId, 'ℹ️ **没有可重发的结果**\n\n当前还没有缓存的完整结果。')
         } catch (error) {
           this.ctx.logger.error('[telegram] cached result delivery failed: %s', messageOf(error))
           await this.safeSend(chatId, '⚠️ **缓存结果补发失败**\n\n缓存仍保留，请稍后使用 /resend 重试。')
@@ -2486,7 +2486,7 @@ export class TelegramBridge {
       chat.transientMessageIds.add(messageId)
     }
     // Native Rich Markdown is the only assistant delivery path. Rejections and
-    // ambiguous transport failures keep the disk cache for explicit /resend,
+    // successful sends and ambiguous failures keep the cache for explicit /resend,
     // never an automatic retry with a reduced format.
     chat.latestDeliveryFailed = true
     const sent = await this.resultCache.deliver(chat.chatId, richMarkdown ?? text, markdown =>

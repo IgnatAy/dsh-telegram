@@ -156,7 +156,7 @@ describe('TelegramProgress', () => {
     expect(html).toContain('✅ tool-b')
   })
 
-  it('coalesces tokens and refreshes the same native draft before its expiry', async () => {
+  it('coalesces tokens and replaces snapshots without animation, refreshing before expiry', async () => {
     const { p, client, drain } = setup()
     start(p)
     await drain()
@@ -167,7 +167,9 @@ describe('TelegramProgress', () => {
     expect(client.sendRichMessageDraft.mock.calls[1]?.[2]).toContain('字'.repeat(100))
     await vi.advanceTimersByTimeAsync(12000)
     expect(client.sendRichMessageDraft).toHaveBeenCalledTimes(3)
-    expect(client.sendRichMessageDraft.mock.calls.every(call => call[1] === p.draftId)).toBe(true)
+    const ids = client.sendRichMessageDraft.mock.calls.map(call => call[1])
+    expect(new Set(ids).size).toBe(ids.length)
+    expect(ids.every(id => Number.isInteger(id) && Number(id) > 0)).toBe(true)
   })
 
   it('clears a retried attempt and ignores stale chunks and duplicate revisions', async () => {
@@ -275,5 +277,35 @@ describe('TelegramProgress', () => {
     await drain()
     expect(String(client.sendRichMessageDraft.mock.calls.at(-1)?.[2]).length).toBeLessThan(20000)
     expect(p.finalMarkdown('中'.repeat(25000))).toBe('中'.repeat(25000))
+  })
+
+  it('defers disclosures until committed delivery and keeps tool status outside disclosures', async () => {
+    const { p, client, drain } = setup()
+    p.event({ type: 'tool/call', time: 100000, data: { callId: 'a', name: 'read', arguments: '{}' } } as SessionEvent)
+    start(p)
+    chunk(p, '<details><summary>摘要</summary>', 2)
+    await drain()
+    const preview = String(client.sendRichMessageDraft.mock.calls.at(-1)?.[2])
+    expect(preview).not.toContain('<details>')
+    expect(preview).toContain('折叠内容将在本段生成完成后显示')
+    expect(preview).toContain('⏳ read')
+    const complete = '<details><summary>摘要</summary>\n\n正文\n\n</details>'
+    expect(p.finalMarkdown(complete)).toContain(complete)
+  })
+
+  it('does not send truncated rich syntax or resume its tail after overflowing', async () => {
+    const { p, client, drain } = setup()
+    start(p)
+    chunk(p, '<details><summary>摘要</summary>' + '字'.repeat(17000), 2)
+    await drain()
+    chunk(p, '</details>尾部', 3)
+    await vi.advanceTimersByTimeAsync(1200)
+    const preview = String(client.sendRichMessageDraft.mock.calls.at(-1)?.[2])
+    expect(preview).toContain('回复较长')
+    expect(preview).not.toMatch(/<\/?details>|尾部|字/)
+    start(p, 'b', 4)
+    chunk(p, '重试回复', 5, 'b')
+    await vi.advanceTimersByTimeAsync(1200)
+    expect(client.sendRichMessageDraft.mock.calls.at(-1)?.[2]).toContain('重试回复')
   })
 })

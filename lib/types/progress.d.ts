@@ -11,7 +11,7 @@ export declare class TelegramProgress {
     private readonly chatId;
     private readonly enqueue;
     private readonly warn;
-    readonly draftId: number;
+    private draftId;
     private readonly started;
     private readonly abort;
     private readonly signal;
@@ -19,6 +19,7 @@ export declare class TelegramProgress {
     private attempt;
     private revision;
     private text;
+    private previewOverflow;
     private phase;
     private tools;
     private completed;
@@ -52,7 +53,6 @@ export declare class TelegramProgress {
     finishMarkdown(notice?: string): string | undefined;
     private processDetails;
     private toolLines;
-    private details;
     private status;
     private schedule;
     private send;

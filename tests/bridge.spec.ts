@@ -1765,7 +1765,7 @@ describe('TelegramBridge', () => {
     await waitFor(() => h.polls.length > 0 ? true : undefined, 'polling')
     h.client.getUpdates.mockResolvedValueOnce([update({ text: '/start' })])
     const reply = await waitFor(() => h.sent[0], 'online reply')
-    expect(reply.text).toMatch(/我在|夜还很长|茶也还热着|魔女没有离开|久远寺邸|童话还没有醒来/)
+    expect(reply.text).toMatch(/\*\*在线 · 摸鱼暂停\*\*\n\n[^\n]+\n\n---/)
     expect(h.agents).toHaveLength(0)
   })
 
@@ -1929,7 +1929,7 @@ describe('TelegramBridge', () => {
     expect(h.client.sendMessage).not.toHaveBeenCalled()
   })
 
-  it('resends failed output after restart without a selected session and deletes it after success', async () => {
+  it('resends failed output after restart without a selected session and retains it after success', async () => {
     const h = createHarness()
     h.bridge.start()
     await selectNew(h)
@@ -1947,7 +1947,7 @@ describe('TelegramBridge', () => {
     await waitFor(() => restarted.sent.some(s => s.text === 'saved answer') ? true : undefined, 'cached result')
     await settle()
     restarted.client.getUpdates.mockResolvedValueOnce([update({ text: '/resend' })])
-    await waitFor(() => restarted.sent.some(s => s.text.includes('没有待发送')) ? true : undefined, 'cache deleted')
+    await waitFor(() => restarted.sent.filter(s => s.text === 'saved answer').length === 2 ? true : undefined, 'cached result retained')
     expect(restarted.agents).toHaveLength(0)
     const commands = restarted.client.setMyCommands.mock.calls[0]?.[0] as { command: string }[]
     expect(commands.some(entry => entry.command === 'resend')).toBe(true)

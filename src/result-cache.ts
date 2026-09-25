@@ -3,7 +3,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 
-/** One replaceable, unsent complete output per bot/chat; never a history log. */
+/** One replaceable complete output per bot/chat; retained for display recovery. */
 export class TelegramResultCache {
   private readonly queues = new Map<number, Promise<unknown>>()
   readonly directory: string
@@ -41,9 +41,8 @@ export class TelegramResultCache {
       } finally {
         await rm(temporary, { force: true })
       }
-      const result = await send(markdown)
-      await rm(path, { force: true })
-      return result
+      // API acceptance does not guarantee that a client rendered the message.
+      return send(markdown)
     })
   }
 
@@ -60,7 +59,6 @@ export class TelegramResultCache {
       if (typeof value !== 'object' || value === null || !('markdown' in value)
         || typeof value.markdown !== 'string') throw new Error('Invalid Telegram result cache')
       await send(value.markdown)
-      await rm(path, { force: true })
       return true
     })
   }
