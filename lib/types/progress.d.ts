@@ -47,10 +47,10 @@ export declare class TelegramProgress {
     stopByUser(): void;
     /** A terminal message clears a tool-only/failed draft even without an assistant answer. */
     terminalNotice(reason: string): string | undefined;
-    /** Persisted process content is folded; the latest answer remains outside. */
-    finalMarkdown(text: string): string;
+    /** Deliver process history first, then the untouched answer as a separate message. */
+    finalMessages(text: string): string[];
     /** Include late tool results and reasoning-only turns in the terminal delivery. */
-    finishMarkdown(notice?: string): string | undefined;
+    finishMessages(notice?: string): string[] | undefined;
     private processDetails;
     private toolLines;
     private status;

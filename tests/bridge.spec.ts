@@ -2016,13 +2016,15 @@ describe('TelegramBridge', () => {
       type: 'assistant/message',
       data: { message: { content: [{ type: 'text', text: 'x'.repeat(40) }] } },
     } as SessionEvent)
-    await waitFor(() => h.sent.length === 2 ? true : undefined, 'separate intermediate outputs')
+    await waitFor(() => h.sent.length === 3 ? true : undefined, 'separate intermediate outputs')
     const [first, ...finalChunks] = h.sent
     expect(first?.text).toBe('first')
     expect(finalChunks[0]?.text).toContain('<details>')
     expect(finalChunks[0]?.text).toContain('first')
-    expect(finalChunks[0]?.text.endsWith('x'.repeat(40))).toBe(true)
-    expect(finalChunks).toHaveLength(1)
+    expect(finalChunks[0]?.text.startsWith('<details>')).toBe(true)
+    expect(finalChunks[0]?.text).not.toContain('x'.repeat(40))
+    expect(finalChunks[1]?.text).toBe('x'.repeat(40))
+    expect(finalChunks).toHaveLength(2)
     expect(h.client.editMessageText).not.toHaveBeenCalled()
 
     h.emit(sessionId, {
@@ -2033,6 +2035,10 @@ describe('TelegramBridge', () => {
     const deleted = h.client.deleteMessages.mock.calls[0]?.[1] as number[]
     expect(deleted).toContain(first!.messageId)
     for (const chunk of finalChunks) expect(deleted).not.toContain(chunk.messageId)
+    h.client.getUpdates.mockResolvedValueOnce([update({ text: '/resend' })])
+    await waitFor(() => h.sent.length === 5 ? true : undefined, 'separate process and answer resend')
+    expect(h.sent[3]?.text).toBe(finalChunks[0]?.text)
+    expect(h.sent[4]?.text).toBe(finalChunks[1]?.text)
   })
 
   it('delivers a reasoning-only turn with late tool output inside the final disclosure', async () => {

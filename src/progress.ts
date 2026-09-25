@@ -178,20 +178,19 @@ export class TelegramProgress {
     return 'ℹ️ **任务已结束**'
   }
 
-  /** Persisted process content is folded; the latest answer remains outside. */
-  finalMarkdown(text: string): string {
-    // Put trusted metadata first: an unfinished model fence must not swallow it.
-    const details = this.processDetails(text)
-    this.lastPublished = details ? `${details}\n\n${text}` : text
-    return this.lastPublished
+  /** Deliver process history first, then the untouched answer as a separate message. */
+  finalMessages(text: string): string[] {
+    const messages = [this.processDetails(text), text].filter(part => part.trim())
+    this.lastPublished = JSON.stringify(messages)
+    return messages
   }
 
   /** Include late tool results and reasoning-only turns in the terminal delivery. */
-  finishMarkdown(notice?: string): string | undefined {
+  finishMessages(notice?: string): string[] | undefined {
     if (this.stoppedByUser || !this.transcript.hasEntries) return undefined
     const previous = this.lastPublished
-    const result = this.finalMarkdown(notice ?? this.transcript.answer)
-    return result === previous ? undefined : result
+    const result = this.finalMessages(notice ?? this.transcript.answer)
+    return this.lastPublished === previous ? undefined : result
   }
 
   private processDetails(answer: string): string {

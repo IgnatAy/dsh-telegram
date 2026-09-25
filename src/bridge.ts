@@ -2443,14 +2443,14 @@ export class TelegramBridge {
         chat.progress?.event(event)
         const text = assistantText(event)
         if (text !== undefined) {
-          const richMarkdown = chat.progress?.finalMarkdown(text)
-          void this.enqueue(chat, () => this.onAssistantText(chat, text, richMarkdown))
+          const messages = chat.progress?.finalMessages(text) ?? [text]
+          void this.enqueue(chat, () => this.onAssistantText(chat, messages))
         }
         break
       }
       case 'turn/end': {
         const notice = chat.progress?.terminalNotice(event.data.reason?.kind ?? 'completed')
-        const final = event.data.reason?.kind === 'aborted' ? undefined : chat.progress?.finishMarkdown(notice)
+        const final = event.data.reason?.kind === 'aborted' ? undefined : chat.progress?.finishMessages(notice)
         chat.progress?.dispose()
         void this.enqueue(chat, async () => {
           this.stopTyping(chat)
@@ -2481,7 +2481,7 @@ export class TelegramBridge {
   }
 
   /** Send each complete assistant step as a fresh message instead of editing prior output. */
-  private async onAssistantText(chat: ActiveChatSession, text: string, richMarkdown?: string): Promise<void> {
+  private async onAssistantText(chat: ActiveChatSession, text: string | string[]): Promise<void> {
     for (const messageId of chat.latestAssistantMessageIds) {
       chat.transientMessageIds.add(messageId)
     }
@@ -2489,10 +2489,13 @@ export class TelegramBridge {
     // successful sends and ambiguous failures keep the cache for explicit /resend,
     // never an automatic retry with a reduced format.
     chat.latestDeliveryFailed = true
-    const sent = await this.resultCache.deliver(chat.chatId, richMarkdown ?? text, markdown =>
-      this.client.sendRichMessage(chat.chatId, markdown, this.abortController.signal))
+    chat.latestAssistantMessageIds = []
+    await this.resultCache.deliver(chat.chatId, text, async markdown => {
+      const sent = await this.client.sendRichMessage(chat.chatId, markdown, this.abortController.signal)
+      // Track each accepted message even if a later part fails to send.
+      chat.latestAssistantMessageIds.push(sent.message_id)
+    })
     chat.latestDeliveryFailed = false
-    chat.latestAssistantMessageIds = [sent.message_id]
   }
 
   /**
