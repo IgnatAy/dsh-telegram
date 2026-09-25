@@ -19,6 +19,8 @@ export declare class TelegramProgress {
     private attempt;
     private revision;
     private text;
+    private committedPreview;
+    private committedOverflow;
     private previewOverflow;
     private phase;
     private readonly activeTools;

@@ -35,6 +35,66 @@ function chunk(p: TelegramProgress, text: string, revision: number, attemptId = 
 }
 
 describe('TelegramProgress', () => {
+  it('retains committed text through tool status, heartbeat, new steps and retries without duplication', async () => {
+    const { p, client, drain } = setup()
+    start(p)
+    chunk(p, '已经显示的正文', 2)
+    await drain()
+    const commit = (text: string) => p.event({ type: 'assistant/message', data: {
+      message: { content: [{ type: 'text', text }] },
+    } } as SessionEvent)
+    const check = async () => {
+      await vi.advanceTimersByTimeAsync(1200)
+      const preview = String(client.sendRichMessageDraft.mock.calls.at(-1)?.[2])
+      expect(preview.match(/已经显示的正文/g)).toHaveLength(1)
+      return preview
+    }
+    commit('已经显示的正文')
+    await check()
+    p.event({ type: 'tool/call', time: 100000, data: { callId: 't', name: 'bash' } } as SessionEvent)
+    expect(await check()).toContain('正在执行工具')
+    p.event({ type: 'tool/result', data: { message: { content: [{ type: 'tool-result', toolCallId: 't' }] } } } as SessionEvent)
+    expect(await check()).toContain('正在整理工具结果')
+    await vi.advanceTimersByTimeAsync(12000)
+    await check()
+    p.event({ type: 'step/start', data: { step: 2 } } as SessionEvent)
+    await check()
+    start(p, 'b', 3)
+    await check()
+    chunk(p, '废弃尝试', 4, 'b')
+    await check()
+    start(p, 'c', 5)
+    expect(await check()).not.toContain('废弃尝试')
+    chunk(p, '新的正文', 6, 'c')
+    expect(await check()).toContain('新的正文')
+    commit('新的正文')
+    expect((await check()).match(/新的正文/g)).toHaveLength(1)
+    chunk(p, '迟到内容', 7, 'c')
+    expect(await check()).not.toContain('迟到内容')
+    expect(new Set(client.sendRichMessageDraft.mock.calls.map(call => call[1])).size).toBe(1)
+    expect(client.sendRichMessage).not.toHaveBeenCalled()
+  })
+
+  it('keeps earlier preview text when subsequent content is deferred or exceeds the preview budget', async () => {
+    const { p, client } = setup()
+    const commit = (text: string) => p.event({ type: 'assistant/message', data: {
+      message: { content: [{ type: 'text', text }] },
+    } } as SessionEvent)
+    commit('已保留正文')
+    commit('<details><summary>补充</summary>内容</details>')
+    commit('长'.repeat(15950))
+    commit('额外'.repeat(100))
+    start(p)
+    chunk(p, '新'.repeat(17000), 2)
+    await vi.advanceTimersByTimeAsync(1200)
+    const preview = String(client.sendRichMessageDraft.mock.calls.at(-1)?.[2])
+    expect(preview).toContain('已保留正文')
+    expect(preview).toContain('折叠内容将在任务结束后显示')
+    expect(preview).toContain('回复较长')
+    expect(preview.length).toBeLessThan(16500)
+    expect(preview).not.toContain('<details>')
+  })
+
   it('folds intermediate messages and counts without reasoning or tool details', () => {
     const { p } = setup()
     const assistant = (content: unknown[]) => p.event({ type: 'assistant/message', data: { message: { content } } } as SessionEvent)

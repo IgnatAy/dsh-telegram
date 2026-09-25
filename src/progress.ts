@@ -4,7 +4,15 @@ import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { TelegramApiError } from './client.js'
 import type { TelegramClientLike } from './client.js'
 import { escapeHtml } from './format.js'
-import { TelegramTranscript } from './transcript.js'
+import { richBody, TelegramTranscript } from './transcript.js'
+
+const LONG_PREVIEW = '回复较长，完整内容将在任务结束后显示。'
+
+function previewText(text: string, overflow: boolean): string {
+  return overflow ? LONG_PREVIEW
+    : /<\/?(?:details|summary)\b/i.test(text) ? '折叠内容将在任务结束后显示。'
+    : text
+}
 
 /**
  * One turn's disposable preview. Events mutate bounded state synchronously; a
@@ -20,6 +28,8 @@ export class TelegramProgress {
   private attempt: AssistantStreamFrame['attemptId'] | undefined
   private revision = -1
   private text = ''
+  private committedPreview = ''
+  private committedOverflow = false
   private previewOverflow = false
   private phase = '正在思考'
   private readonly activeTools = new Set<string>()
@@ -87,10 +97,23 @@ export class TelegramProgress {
   event(event: SessionEvent): void {
     if (this.disposed) return
     this.transcript.event(event)
-    if (event.type === 'tool/call') {
-      this.activeTools.add(event.data.callId)
+    if (event.type === 'assistant/message') {
+      if (event.surfaceOp !== undefined && event.surfaceOp !== 'append') return
+      // Transfer the authoritative message into the preview history exactly
+      // once. Status changes and new attempts must not erase completed steps.
+      const text = event.data.message.content.filter(block => block.type === 'text').map(block => block.text).join('')
+      const body = richBody(previewText(text, text.length > 16000))
+      const combined = [this.committedPreview, body].filter(Boolean).join('\n\n')
+      if (!this.committedOverflow) {
+        if (combined.length > 16000) this.committedOverflow = true
+        else this.committedPreview = combined
+      }
       this.text = ''
       this.previewOverflow = false
+      this.attempt = undefined
+      this.changed()
+    } else if (event.type === 'tool/call') {
+      this.activeTools.add(event.data.callId)
       this.phase = '正在执行工具'
       this.changed()
     } else if (event.type === 'tool/result') {
@@ -213,9 +236,9 @@ export class TelegramProgress {
     // recreate the preview on every update.
     // Partial disclosures may have only a summary (or an unfinished body).
     // Leave them to committed delivery, where the complete source is available.
-    const preview = this.previewOverflow ? '回复较长，完整内容将在任务结束后显示。'
-      : /<\/?(?:details|summary)\b/i.test(this.text) ? '折叠内容将在任务结束后显示。'
-      : this.text
+    let current = previewText(this.text, this.previewOverflow)
+    if (this.committedOverflow || this.committedPreview.length + current.length > 16000) current = LONG_PREVIEW
+    const preview = [this.committedPreview, current].filter(Boolean).join('\n\n')
     await this.client.sendRichMessageDraft(this.chatId, this.draftId,
       `<tg-thinking>${escapeHtml(status)}</tg-thinking>\n\n${preview}`, this.signal)
   }
